@@ -73,7 +73,8 @@ export interface Milestone {
 export interface Note {
   id: string;
   title: string;
-  type?: NoteType;
+  type: NoteType;
+  date: string;
   content: string;
   tags?: string[];
   createdAt: string;
