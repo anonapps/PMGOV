@@ -17,10 +17,24 @@ const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", 
 const milestoneStatuses: MilestoneStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const actionStatuses: ActionStatus[] = ["open", "in_progress", "completed", "cancelled"];
 const impactLevels: ImpactLevel[] = ["low", "medium", "high", "critical"];
+const dueWindowOptions = ["All", "Overdue", "Next 30 days", "Completed"] as const;
+const timelineSortOptions = ["Planned Date", "Forecast Date", "Status", "Workstream"] as const;
 
 type NavigationItem = (typeof navigationItems)[number];
 type Message = { tone: "success" | "error" | "info"; text: string };
+type DueWindowFilter = (typeof dueWindowOptions)[number];
+type TimelineSortOption = (typeof timelineSortOptions)[number];
 
+type TimelineMilestone = {
+  milestone: Milestone;
+  stage?: Stage;
+  workstream?: Workstream;
+  daysUntilPlanned: number | null;
+  daysUntilForecast: number | null;
+  isLate: boolean;
+  isDueSoon: boolean;
+  isComplete: boolean;
+};
 
 type DashboardMilestone = {
   milestone: Milestone;
@@ -191,6 +205,10 @@ export function ProjectFileWorkspace() {
   const [openedFileName, setOpenedFileName] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<NavigationItem>("Dashboard");
   const [activeGovernanceTab, setActiveGovernanceTab] = useState<"Actions" | "Decisions">("Actions");
+  const [timelineStatusFilter, setTimelineStatusFilter] = useState<MilestoneStatus | "all">("all");
+  const [timelineWorkstreamFilter, setTimelineWorkstreamFilter] = useState<string>("all");
+  const [timelineDueWindowFilter, setTimelineDueWindowFilter] = useState<DueWindowFilter>("All");
+  const [timelineSortOption, setTimelineSortOption] = useState<TimelineSortOption>("Planned Date");
   const [message, setMessage] = useState<Message>({
     tone: "info",
     text: "Create a new local project file or open an existing .pmgov file to begin.",
@@ -457,6 +475,105 @@ export function ProjectFileWorkspace() {
   }
 
 
+  function getTimelineMilestones(file: PmgovFile, today = todayIsoDate()): TimelineMilestone[] {
+    return file.milestones.map((milestone) => {
+      const context = getMilestoneContext(file, milestone);
+      const daysUntilPlanned = daysBetween(today, milestone.plannedDate);
+      const daysUntilForecast = daysBetween(today, milestone.forecastDate);
+      const isComplete = milestone.status === "complete";
+      const isLate = !isComplete && (daysUntilForecast !== null ? daysUntilForecast < 0 : daysUntilPlanned !== null && daysUntilPlanned < 0);
+      const isDueSoon = !isComplete && (daysUntilForecast !== null ? daysUntilForecast >= 0 && daysUntilForecast <= 30 : daysUntilPlanned !== null && daysUntilPlanned >= 0 && daysUntilPlanned <= 30);
+
+      return { milestone, ...context, daysUntilPlanned, daysUntilForecast, isLate, isDueSoon, isComplete };
+    });
+  }
+
+  function compareTimelineMilestones(a: TimelineMilestone, b: TimelineMilestone) {
+    if (timelineSortOption === "Forecast Date") {
+      return (a.milestone.forecastDate ?? "9999-12-31").localeCompare(b.milestone.forecastDate ?? "9999-12-31") || a.milestone.plannedDate.localeCompare(b.milestone.plannedDate);
+    }
+
+    if (timelineSortOption === "Status") {
+      return a.milestone.status.localeCompare(b.milestone.status) || a.milestone.plannedDate.localeCompare(b.milestone.plannedDate);
+    }
+
+    if (timelineSortOption === "Workstream") {
+      return (a.workstream?.name ?? "Unassigned workstream").localeCompare(b.workstream?.name ?? "Unassigned workstream") || (a.stage?.name ?? "Unassigned stage").localeCompare(b.stage?.name ?? "Unassigned stage") || a.milestone.plannedDate.localeCompare(b.milestone.plannedDate);
+    }
+
+    return a.milestone.plannedDate.localeCompare(b.milestone.plannedDate);
+  }
+
+  function timelineCardTone(item: TimelineMilestone) {
+    if (item.isComplete) {
+      return "border-green-300 bg-green-50";
+    }
+
+    if (item.milestone.status === "red" || item.isLate) {
+      return "border-red-300 bg-red-50";
+    }
+
+    if (item.milestone.status === "amber") {
+      return "border-amber-300 bg-amber-50";
+    }
+
+    if (item.isDueSoon) {
+      return "border-blue-300 bg-blue-50";
+    }
+
+    return "border-slate-200 bg-white";
+  }
+
+  function renderTimelineWorkspace(file: PmgovFile) {
+    const timelineItems = getTimelineMilestones(file)
+      .filter((item) => timelineStatusFilter === "all" || item.milestone.status === timelineStatusFilter)
+      .filter((item) => timelineWorkstreamFilter === "all" || item.workstream?.id === timelineWorkstreamFilter)
+      .filter((item) => {
+        if (timelineDueWindowFilter === "Overdue") {
+          return item.isLate;
+        }
+        if (timelineDueWindowFilter === "Next 30 days") {
+          return item.isDueSoon;
+        }
+        if (timelineDueWindowFilter === "Completed") {
+          return item.isComplete;
+        }
+        return true;
+      })
+      .sort(compareTimelineMilestones);
+    const groupedWorkstreams = [...file.workstreams]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((workstream) => ({
+        workstream,
+        stages: file.stages
+          .filter((stage) => stage.workstreamId === workstream.id)
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((stage) => ({ stage, milestones: timelineItems.filter((item) => item.stage?.id === stage.id) }))
+          .filter((stageGroup) => stageGroup.milestones.length > 0),
+      }))
+      .filter((workstreamGroup) => workstreamGroup.stages.length > 0);
+    const unassignedMilestones = timelineItems.filter((item) => !item.workstream || !item.stage);
+
+    return (
+      <section className="space-y-6" id="timeline">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Timeline</p>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h3 className="text-2xl font-bold">Project roadmap</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Read-only view of milestones grouped by workstream and stage, with date risk and status highlights.</p></div><div className="grid grid-cols-2 gap-2 text-xs font-semibold text-slate-600 md:grid-cols-5"><span className="rounded-full border border-red-300 bg-red-50 px-3 py-2 text-red-800">Late / Red</span><span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800">Amber</span><span className="rounded-full border border-green-300 bg-green-50 px-3 py-2 text-green-800">Complete</span><span className="rounded-full border border-blue-300 bg-blue-50 px-3 py-2 text-blue-800">Next 30 days</span><span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-slate-700">On track</span></div></div>
+        </div>
+
+        <div className="grid gap-4 rounded-3xl border border-slate-200 bg-white p-5 md:grid-cols-2 xl:grid-cols-4">
+          <label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setTimelineStatusFilter(event.target.value as MilestoneStatus | "all")} value={timelineStatusFilter}><option value="all">All statuses</option>{milestoneStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label>
+          <label className="text-sm font-medium text-slate-700">Workstream<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setTimelineWorkstreamFilter(event.target.value)} value={timelineWorkstreamFilter}><option value="all">All workstreams</option>{[...file.workstreams].sort((a, b) => a.sortOrder - b.sortOrder).map((workstream) => <option key={workstream.id} value={workstream.id}>{workstream.name}</option>)}</select></label>
+          <label className="text-sm font-medium text-slate-700">Due window<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setTimelineDueWindowFilter(event.target.value as DueWindowFilter)} value={timelineDueWindowFilter}>{dueWindowOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+          <label className="text-sm font-medium text-slate-700">Sort by<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setTimelineSortOption(event.target.value as TimelineSortOption)} value={timelineSortOption}>{timelineSortOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+        </div>
+
+        {file.milestones.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">Create workstreams, stages and milestones to populate the timeline.</p> : timelineItems.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No milestones match the current timeline filters.</p> : <div className="space-y-6">{groupedWorkstreams.map(({ workstream, stages }) => <section className="rounded-3xl border border-slate-200 bg-white p-6" key={workstream.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Workstream</p><h4 className="mt-1 text-xl font-bold">{workstream.name}</h4></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(workstream.status)}`}>{statusLabel(workstream.status)}</span></div><div className="mt-5 space-y-5">{stages.map(({ stage, milestones }) => <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={stage.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Stage</p><h5 className="mt-1 text-lg font-bold">{stage.name}</h5></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(stage.status ?? "not_started")}`}>{statusLabel(stage.status ?? "not_started")}</span></div><div className="mt-4 grid gap-4">{milestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-1 text-sm text-slate-600">{workstream.name} · {stage.name}</p></div><div className="flex flex-wrap gap-2"><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(item.milestone.status)}`}>{statusLabel(item.milestone.status)}</span>{item.isLate ? <span className="rounded-full border border-red-300 bg-white px-3 py-1 text-xs font-bold uppercase text-red-800">Late</span> : null}{item.isDueSoon ? <span className="rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-bold uppercase text-blue-800">Next 30 days</span> : null}</div></div><dl className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4"><div><dt className="font-semibold text-slate-500">Planned Date</dt><dd className="mt-1 font-bold">{item.milestone.plannedDate}</dd></div><div><dt className="font-semibold text-slate-500">Forecast Date</dt><dd className="mt-1 font-bold">{item.milestone.forecastDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Actual Date</dt><dd className="mt-1 font-bold">{item.milestone.actualDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Variance</dt><dd className="mt-1 font-bold">{formatVariance(item.milestone)}</dd></div><div><dt className="font-semibold text-slate-500">Status</dt><dd className="mt-1 font-bold capitalize">{statusLabel(item.milestone.status)}</dd></div><div><dt className="font-semibold text-slate-500">Owner</dt><dd className="mt-1 font-bold">{file.project.projectManager || "Project Manager"}</dd></div><div className="md:col-span-2"><dt className="font-semibold text-slate-500">Commentary</dt><dd className="mt-1 whitespace-pre-wrap text-slate-700">{item.milestone.commentary || "No commentary"}</dd></div></dl></article>)}</div></div>)}</div></section>)}{unassignedMilestones.length > 0 ? <section className="rounded-3xl border border-slate-200 bg-white p-6"><h4 className="text-xl font-bold">Unassigned milestones</h4><div className="mt-4 grid gap-4">{unassignedMilestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-2 text-sm text-slate-600">{item.workstream?.name ?? "Unassigned workstream"} · {item.stage?.name ?? "Unassigned stage"}</p><p className="mt-3 text-sm font-semibold text-slate-700">Planned {item.milestone.plannedDate} · Forecast {item.milestone.forecastDate ?? "Not set"} · {formatVariance(item.milestone)}</p></article>)}</div></section> : null}</div>}
+      </section>
+    );
+  }
+
+
   function isActionOverdue(action: ActionItem) {
     return action.status !== "completed" && action.status !== "cancelled" && daysBetween(todayIsoDate(), action.dueDate) !== null && (daysBetween(todayIsoDate(), action.dueDate) ?? 0) < 0;
   }
@@ -648,6 +765,8 @@ export function ProjectFileWorkspace() {
                 renderDashboard(projectFile)
               ) : activeView === "Workstreams" ? (
                 renderWorkstreamsWorkspace(projectFile)
+              ) : activeView === "Timeline" ? (
+                renderTimelineWorkspace(projectFile)
               ) : activeView === "Governance" ? (
                 renderGovernanceWorkspace(projectFile)
               ) : (
