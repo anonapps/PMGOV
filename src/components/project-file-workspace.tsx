@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useMemo, useRef, useState } from "react";
-import type { Milestone, MilestoneStatus, PmgovFile, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
+import type { ActionItem, ActionStatus, Decision, ImpactLevel, Milestone, MilestoneStatus, PmgovFile, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
 import {
   buildPmgovFilename,
   createEmptyProjectFile,
@@ -15,6 +15,8 @@ const navigationItems = ["Dashboard", "Workstreams", "Timeline", "Notebook", "Go
 const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", "blocked"];
 const milestoneStatuses: MilestoneStatus[] = ["not_set", "green", "amber", "red", "complete"];
+const actionStatuses: ActionStatus[] = ["open", "in_progress", "completed", "cancelled"];
+const impactLevels: ImpactLevel[] = ["low", "medium", "high", "critical"];
 
 type NavigationItem = (typeof navigationItems)[number];
 type Message = { tone: "success" | "error" | "info"; text: string };
@@ -188,6 +190,7 @@ export function ProjectFileWorkspace() {
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
   const [openedFileName, setOpenedFileName] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<NavigationItem>("Dashboard");
+  const [activeGovernanceTab, setActiveGovernanceTab] = useState<"Actions" | "Decisions">("Actions");
   const [message, setMessage] = useState<Message>({
     tone: "info",
     text: "Create a new local project file or open an existing .pmgov file to begin.",
@@ -405,7 +408,7 @@ export function ProjectFileWorkspace() {
       .sort((a, b) => (a.daysUntilPlanned ?? 0) - (b.daysUntilPlanned ?? 0))
       .slice(0, 6);
     const openActions: DashboardAction[] = file.actions
-      .filter((action) => action.status !== "complete" && action.status !== "cancelled")
+      .filter((action) => action.status !== "completed" && action.status !== "cancelled")
       .map((action) => ({ action, daysUntilDue: daysBetween(today, action.dueDate) }))
       .sort((a, b) => (a.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilDue ?? Number.MAX_SAFE_INTEGER));
     const recentDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate)).slice(0, 5);
@@ -450,6 +453,88 @@ export function ProjectFileWorkspace() {
           {file.project.executiveSummary ? <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">{file.project.executiveSummary}</p> : <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No executive summary has been entered for this project.</p>}
         </section>
       </div>
+    );
+  }
+
+
+  function isActionOverdue(action: ActionItem) {
+    return action.status !== "completed" && action.status !== "cancelled" && daysBetween(todayIsoDate(), action.dueDate) !== null && (daysBetween(todayIsoDate(), action.dueDate) ?? 0) < 0;
+  }
+
+  function addAction() {
+    const action: ActionItem = { id: crypto.randomUUID(), description: "New action", owner: "", dueDate: todayIsoDate(), status: "open", commentary: "" };
+    mutateProjectFile((current) => ({ ...current, actions: [...current.actions, action] }), "Action created.");
+  }
+
+  function updateAction(id: string, patch: Partial<ActionItem>) {
+    mutateProjectFile((current) => ({ ...current, actions: current.actions.map((action) => (action.id === id ? { ...action, ...patch } : action)) }), "Action updated.");
+  }
+
+  function deleteAction(action: ActionItem) {
+    if (!window.confirm(`Delete action: ${action.description}?`)) {
+      return;
+    }
+
+    mutateProjectFile((current) => ({ ...current, actions: current.actions.filter((item) => item.id !== action.id) }), "Action deleted.");
+  }
+
+  function addDecision() {
+    const decision: Decision = { id: crypto.randomUUID(), title: "New decision", context: "", decisionText: "", decisionMaker: "", decisionDate: todayIsoDate(), impact: "low", evidenceLinks: [] };
+    mutateProjectFile((current) => ({ ...current, decisions: [...current.decisions, decision] }), "Decision created.");
+  }
+
+  function updateDecision(id: string, patch: Partial<Decision>) {
+    mutateProjectFile((current) => ({ ...current, decisions: current.decisions.map((decision) => (decision.id === id ? { ...decision, ...patch } : decision)) }), "Decision updated.");
+  }
+
+  function updateDecisionEvidenceLinks(id: string, value: string) {
+    updateDecision(id, { evidenceLinks: value.split("\n").map((link) => link.trim()).filter(Boolean) });
+  }
+
+  function deleteDecision(decision: Decision) {
+    if (!window.confirm(`Delete decision: ${decision.title}?`)) {
+      return;
+    }
+
+    mutateProjectFile((current) => ({ ...current, decisions: current.decisions.filter((item) => item.id !== decision.id) }), "Decision deleted.");
+  }
+
+  function renderGovernanceWorkspace(file: PmgovFile) {
+    const sortedActions = [...file.actions].sort((a, b) => (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31"));
+    const sortedDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate));
+
+    return (
+      <section className="space-y-6" id="governance">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Governance</p>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-2xl font-bold">Actions and decisions</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Capture governance actions and formal decisions directly in the local .pmgov file. Save and reopen the file to preserve these records.</p>
+            </div>
+            <div className="flex rounded-2xl bg-slate-100 p-1">
+              {(["Actions", "Decisions"] as const).map((tab) => (
+                <button className={`rounded-xl px-4 py-2 text-sm font-bold ${activeGovernanceTab === tab ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`} key={tab} onClick={() => setActiveGovernanceTab(tab)} type="button">{tab}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {activeGovernanceTab === "Actions" ? (
+          <section className="rounded-3xl border border-slate-200 bg-white p-6">
+            <div className="flex items-center justify-between gap-3"><div><h4 className="text-xl font-bold">Actions</h4><p className="mt-1 text-sm text-slate-600">Overdue actions are highlighted when their due date is in the past and their status is not completed or cancelled.</p></div><button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white" onClick={addAction} type="button">Create Action</button></div>
+            {sortedActions.length === 0 ? <p className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No actions captured yet.</p> : <div className="mt-5 space-y-4">{sortedActions.map((action) => {
+              const overdue = isActionOverdue(action);
+              return <article className={`rounded-3xl border p-5 ${overdue ? "border-red-300 bg-red-50" : "border-slate-200 bg-slate-50"}`} key={action.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Description<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateAction(action.id, { description: event.target.value })} value={action.description} /></label><label className="text-sm font-medium text-slate-700">Owner<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateAction(action.id, { owner: event.target.value })} value={action.owner} /></label><label className="text-sm font-medium text-slate-700">Due Date<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateAction(action.id, { dueDate: optionalDate(event.target.value) })} type="date" value={action.dueDate ?? ""} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateAction(action.id, { status: event.target.value as ActionStatus })} value={action.status}>{actionStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label><div className="rounded-2xl bg-white p-3 text-sm"><span className="font-semibold text-slate-500">Due</span><span className={`mt-1 block font-bold ${overdue ? "text-red-800" : "text-slate-900"}`}>{action.dueDate ? formatDateDistance(daysBetween(todayIsoDate(), action.dueDate)) : "No due date"}</span></div><button className="self-end rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteAction(action)} type="button">Delete Action</button><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateAction(action.id, { commentary: event.target.value })} value={action.commentary ?? ""} /></label></div></article>;
+            })}</div>}
+          </section>
+        ) : (
+          <section className="rounded-3xl border border-slate-200 bg-white p-6">
+            <div className="flex items-center justify-between gap-3"><div><h4 className="text-xl font-bold">Decisions</h4><p className="mt-1 text-sm text-slate-600">Record decision context, decision text, accountable maker, impact, and evidence links.</p></div><button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white" onClick={addDecision} type="button">Create Decision</button></div>
+            {sortedDecisions.length === 0 ? <p className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No decisions captured yet.</p> : <div className="mt-5 space-y-4">{sortedDecisions.map((decision) => <article className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={decision.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { title: event.target.value })} value={decision.title} /></label><label className="text-sm font-medium text-slate-700">Decision Maker<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionMaker: event.target.value })} value={decision.decisionMaker ?? ""} /></label><label className="text-sm font-medium text-slate-700">Decision Date<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionDate: event.target.value })} type="date" value={decision.decisionDate} /></label><label className="text-sm font-medium text-slate-700">Impact<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { impact: event.target.value as ImpactLevel })} value={decision.impact ?? "low"}>{impactLevels.map((impact) => <option key={impact} value={impact}>{statusLabel(impact)}</option>)}</select></label><button className="self-end rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteDecision(decision)} type="button">Delete Decision</button><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Context<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { context: event.target.value })} value={decision.context ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Decision Text<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionText: event.target.value })} value={decision.decisionText} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Evidence Links<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecisionEvidenceLinks(decision.id, event.target.value)} placeholder="One link per line" value={(decision.evidenceLinks ?? []).join("\n")} /></label></div></article>)}</div>}
+          </section>
+        )}
+      </section>
     );
   }
 
@@ -563,6 +648,8 @@ export function ProjectFileWorkspace() {
                 renderDashboard(projectFile)
               ) : activeView === "Workstreams" ? (
                 renderWorkstreamsWorkspace(projectFile)
+              ) : activeView === "Governance" ? (
+                renderGovernanceWorkspace(projectFile)
               ) : (
                 renderPlaceholder(activeView)
               )}
