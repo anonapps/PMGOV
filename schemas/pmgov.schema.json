@@ -259,6 +259,8 @@
       "required": [
         "id",
         "title",
+        "type",
+        "date",
         "content",
         "createdAt",
         "updatedAt"
@@ -276,6 +278,10 @@
             "workshop",
             "general"
           ]
+        },
+        "date": {
+          "type": "string",
+          "format": "date"
         },
         "content": {
           "type": "string"

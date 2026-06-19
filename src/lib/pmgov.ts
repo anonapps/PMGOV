@@ -74,7 +74,8 @@ export const pmgovFileSchema = z.object({
     z.object({
       id: z.string().min(1),
       title: z.string().min(1),
-      type: noteTypeSchema.optional(),
+      type: noteTypeSchema,
+      date: isoDate,
       content: z.string(),
       tags: z.array(z.string()).optional(),
       createdAt: isoDateTime,

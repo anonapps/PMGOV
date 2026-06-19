@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useMemo, useRef, useState } from "react";
-import type { ActionItem, ActionStatus, Decision, ImpactLevel, Milestone, MilestoneStatus, PmgovFile, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
+import type { ActionItem, ActionStatus, Decision, ImpactLevel, Milestone, MilestoneStatus, Note, NoteType, PmgovFile, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
 import {
   buildPmgovFilename,
   createEmptyProjectFile,
@@ -16,6 +16,7 @@ const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "re
 const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", "blocked"];
 const milestoneStatuses: MilestoneStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const actionStatuses: ActionStatus[] = ["open", "in_progress", "completed", "cancelled"];
+const noteTypes: NoteType[] = ["meeting", "workshop", "general"];
 const impactLevels: ImpactLevel[] = ["low", "medium", "high", "critical"];
 const dueWindowOptions = ["All", "Overdue", "Next 30 days", "Completed"] as const;
 const timelineSortOptions = ["Planned Date", "Forecast Date", "Status", "Workstream"] as const;
@@ -222,6 +223,9 @@ export function ProjectFileWorkspace() {
   const [openedFileName, setOpenedFileName] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<NavigationItem>("Dashboard");
   const [activeGovernanceTab, setActiveGovernanceTab] = useState<"Actions" | "Decisions">("Actions");
+  const [noteSearchQuery, setNoteSearchQuery] = useState("");
+  const [noteTypeFilter, setNoteTypeFilter] = useState<NoteType | "all">("all");
+  const [noteTagFilter, setNoteTagFilter] = useState("all");
   const [timelineStatusFilter, setTimelineStatusFilter] = useState<MilestoneStatus | "all">("all");
   const [timelineWorkstreamFilter, setTimelineWorkstreamFilter] = useState<string>("all");
   const [timelineDueWindowFilter, setTimelineDueWindowFilter] = useState<DueWindowFilter>("All");
@@ -594,6 +598,87 @@ export function ProjectFileWorkspace() {
   }
 
 
+  function parseTags(value: string) {
+    return value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  function addNote() {
+    const now = new Date().toISOString();
+    const note: Note = {
+      id: crypto.randomUUID(),
+      title: "New note",
+      type: "general",
+      date: todayIsoDate(),
+      content: "",
+      tags: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    mutateProjectFile((current) => ({ ...current, notes: [note, ...current.notes] }), "Note created.");
+  }
+
+  function updateNote(id: string, patch: Partial<Pick<Note, "title" | "type" | "date" | "content" | "tags">>) {
+    mutateProjectFile(
+      (current) => ({
+        ...current,
+        notes: current.notes.map((note) => (note.id === id ? { ...note, ...patch, updatedAt: new Date().toISOString() } : note)),
+      }),
+      "Note updated.",
+    );
+  }
+
+  function deleteNote(note: Note) {
+    if (!window.confirm(`Delete note: ${note.title}?`)) {
+      return;
+    }
+
+    mutateProjectFile((current) => ({ ...current, notes: current.notes.filter((item) => item.id !== note.id) }), "Note deleted.");
+  }
+
+  function renderNotebookWorkspace(file: PmgovFile) {
+    const availableTags = Array.from(new Set(file.notes.flatMap((note) => note.tags ?? []))).sort((a, b) => a.localeCompare(b));
+    const normalizedSearch = noteSearchQuery.trim().toLowerCase();
+    const filteredNotes = [...file.notes]
+      .filter((note) => noteTypeFilter === "all" || note.type === noteTypeFilter)
+      .filter((note) => noteTagFilter === "all" || (note.tags ?? []).includes(noteTagFilter))
+      .filter((note) => !normalizedSearch || note.title.toLowerCase().includes(normalizedSearch) || note.content.toLowerCase().includes(normalizedSearch))
+      .sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt.localeCompare(a.updatedAt));
+
+    return (
+      <section className="space-y-6" id="notebook">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Notebook</p>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-2xl font-bold">Project notes</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Capture meeting notes, workshop notes, and general project context directly in the local .pmgov file.</p>
+            </div>
+            <button className="rounded-2xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-800" onClick={addNote} type="button">Create Note</button>
+          </div>
+        </div>
+
+        <div className="grid gap-4 rounded-3xl border border-slate-200 bg-white p-5 md:grid-cols-3">
+          <label className="text-sm font-medium text-slate-700">Search title/content<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setNoteSearchQuery(event.target.value)} placeholder="Search notes" value={noteSearchQuery} /></label>
+          <label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setNoteTypeFilter(event.target.value as NoteType | "all")} value={noteTypeFilter}><option value="all">All types</option>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label>
+          <label className="text-sm font-medium text-slate-700">Tag<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setNoteTagFilter(event.target.value)} value={noteTagFilter}><option value="all">All tags</option>{availableTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
+        </div>
+
+        {file.notes.length === 0 ? (
+          <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No notes captured yet. Create a note to record meeting outcomes, workshops or project context.</p>
+        ) : filteredNotes.length === 0 ? (
+          <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No notes match the current search and filters.</p>
+        ) : (
+          <div className="grid gap-5">{filteredNotes.map((note) => <article className="rounded-3xl border border-slate-200 bg-white p-5" key={note.id}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { title: event.target.value })} value={note.title} /></label><label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { type: event.target.value as NoteType })} value={note.type}>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { date: event.target.value })} type="date" value={note.date} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Content<textarea className="mt-2 min-h-40 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { content: event.target.value })} value={note.content} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-3">Tags<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { tags: parseTags(event.target.value) })} placeholder="Comma-separated tags" value={(note.tags ?? []).join(", ")} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteNote(note)} type="button">Delete Note</button><dl className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 md:col-span-2 xl:col-span-4 md:grid-cols-2"><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Created At</dt><dd className="mt-1">{formatReportGeneratedAt(note.createdAt)}</dd></div><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Updated At</dt><dd className="mt-1">{formatReportGeneratedAt(note.updatedAt)}</dd></div></dl></div></article>)}</div>
+        )}
+      </section>
+    );
+  }
+
+
   function isActionOverdue(action: ActionItem) {
     return action.status !== "completed" && action.status !== "cancelled" && daysBetween(todayIsoDate(), action.dueDate) !== null && (daysBetween(todayIsoDate(), action.dueDate) ?? 0) < 0;
   }
@@ -878,6 +963,8 @@ export function ProjectFileWorkspace() {
                 renderWorkstreamsWorkspace(projectFile)
               ) : activeView === "Timeline" ? (
                 renderTimelineWorkspace(projectFile)
+              ) : activeView === "Notebook" ? (
+                renderNotebookWorkspace(projectFile)
               ) : activeView === "Governance" ? (
                 renderGovernanceWorkspace(projectFile)
               ) : activeView === "Reports" ? (
