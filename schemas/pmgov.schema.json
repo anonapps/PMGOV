@@ -1,0 +1,456 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/pmgov.schema.json",
+  "title": "Project Governance Workspace File",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "fileMetadata",
+    "project",
+    "workstreams",
+    "stages",
+    "milestones",
+    "notes",
+    "decisions",
+    "actions",
+    "links",
+    "reports"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "fileMetadata": {
+      "type": "object",
+      "required": [
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdByAppVersion": {
+          "type": "string"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "status",
+        "projectManager"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "sponsor": {
+          "type": "string"
+        },
+        "projectManager": {
+          "type": "string"
+        },
+        "startDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "status": {
+          "enum": [
+            "green",
+            "amber",
+            "red",
+            "not_set"
+          ]
+        },
+        "executiveSummary": {
+          "type": "string"
+        }
+      }
+    },
+    "workstreams": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workstream"
+      }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/stage"
+      }
+    },
+    "milestones": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/milestone"
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/note"
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/decision"
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/link"
+      }
+    },
+    "reports": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/report"
+      }
+    }
+  },
+  "$defs": {
+    "workstream": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "status",
+        "sortOrder"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "green",
+            "amber",
+            "red",
+            "not_set",
+            "complete"
+          ]
+        },
+        "commentary": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "number"
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": [
+        "id",
+        "workstreamId",
+        "name",
+        "sortOrder"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "workstreamId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "not_started",
+            "in_progress",
+            "complete",
+            "blocked"
+          ]
+        },
+        "commentary": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "number"
+        }
+      }
+    },
+    "milestone": {
+      "type": "object",
+      "required": [
+        "id",
+        "stageId",
+        "name",
+        "plannedDate",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "stageId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "plannedDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "forecastDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "actualDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "status": {
+          "enum": [
+            "green",
+            "amber",
+            "red",
+            "complete",
+            "not_set"
+          ]
+        },
+        "commentary": {
+          "type": "string"
+        }
+      }
+    },
+    "note": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "content",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "meeting",
+            "workshop",
+            "general"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "decisionText",
+        "decisionDate"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "decisionText": {
+          "type": "string"
+        },
+        "decisionMaker": {
+          "type": "string"
+        },
+        "decisionDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "impact": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical",
+            "not_set"
+          ]
+        },
+        "evidenceLinks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "id",
+        "description",
+        "owner",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "status": {
+          "enum": [
+            "open",
+            "in_progress",
+            "complete",
+            "cancelled"
+          ]
+        },
+        "commentary": {
+          "type": "string"
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "id",
+        "sourceType",
+        "sourceId",
+        "targetType",
+        "targetId"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "sourceType": {
+          "enum": [
+            "note",
+            "decision",
+            "action",
+            "milestone",
+            "workstream",
+            "stage"
+          ]
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "targetType": {
+          "enum": [
+            "note",
+            "decision",
+            "action",
+            "milestone",
+            "workstream",
+            "stage"
+          ]
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "relationship": {
+          "type": "string"
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "title",
+        "generatedAt",
+        "content"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "status",
+            "steering_committee",
+            "executive"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
