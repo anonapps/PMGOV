@@ -1,0 +1,17 @@
+{
+  "dependencies": {
+    "zod": "latest",
+    "zustand": "latest",
+    "date-fns": "latest",
+    "lucide-react": "latest",
+    "clsx": "latest"
+  },
+  "devDependencies": {
+    "typescript": "latest",
+    "eslint": "latest"
+  },
+  "optionalDependencies": {
+    "@tiptap/react": "for rich text editor if selected",
+    "@tiptap/starter-kit": "for rich text editor if selected"
+  }
+}
