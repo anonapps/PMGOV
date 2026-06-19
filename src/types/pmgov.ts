@@ -1,14 +1,15 @@
-export type RagStatus = 'green' | 'amber' | 'red' | 'not_set';
-export type WorkstreamStatus = RagStatus | 'complete';
-export type StageStatus = 'not_started' | 'in_progress' | 'complete' | 'blocked';
-export type MilestoneStatus = RagStatus | 'complete';
-export type ActionStatus = 'open' | 'in_progress' | 'complete' | 'cancelled';
-export type NoteType = 'meeting' | 'workshop' | 'general';
-export type ImpactLevel = 'low' | 'medium' | 'high' | 'critical' | 'not_set';
-export type EntityType = 'note' | 'decision' | 'action' | 'milestone' | 'workstream' | 'stage';
+export type RagStatus = "green" | "amber" | "red" | "not_set";
+export type WorkstreamStatus = RagStatus | "complete";
+export type StageStatus = "not_started" | "in_progress" | "complete" | "blocked";
+export type MilestoneStatus = RagStatus | "complete";
+export type ActionStatus = "open" | "in_progress" | "complete" | "cancelled";
+export type NoteType = "meeting" | "workshop" | "general";
+export type ImpactLevel = "low" | "medium" | "high" | "critical" | "not_set";
+export type EntityType = "note" | "decision" | "action" | "milestone" | "workstream" | "stage";
+export type ReportType = "status" | "steering_committee" | "executive";
 
 export interface PmgovFile {
-  schemaVersion: '1.0.0';
+  schemaVersion: "1.0.0";
   fileMetadata: FileMetadata;
   project: Project;
   workstreams: Workstream[];
@@ -18,6 +19,7 @@ export interface PmgovFile {
   decisions: Decision[];
   actions: ActionItem[];
   links: EntityLink[];
+  reports: Report[];
 }
 
 export interface FileMetadata {
@@ -105,4 +107,12 @@ export interface EntityLink {
   targetType: EntityType;
   targetId: string;
   relationship?: string;
+}
+
+export interface Report {
+  id: string;
+  type: ReportType;
+  title: string;
+  generatedAt: string;
+  content: string;
 }
