@@ -49,6 +49,23 @@ type DashboardAction = {
   daysUntilDue: number | null;
 };
 
+type ReportMilestone = {
+  milestone: Milestone;
+  stage?: Stage;
+  workstream?: Workstream;
+  daysUntilPlanned: number | null;
+  reasons?: string[];
+};
+
+type ExecutiveReportData = {
+  generatedAt: string;
+  attentionMilestones: ReportMilestone[];
+  upcomingMilestones: ReportMilestone[];
+  openActions: DashboardAction[];
+  recentDecisions: Decision[];
+  statusCounts: Record<WorkstreamStatus, number>;
+};
+
 function getMilestoneContext(file: PmgovFile, milestone: Milestone) {
   const stage = file.stages.find((item) => item.id === milestone.stageId);
   const workstream = stage ? file.workstreams.find((item) => item.id === stage.workstreamId) : undefined;
@@ -209,6 +226,7 @@ export function ProjectFileWorkspace() {
   const [timelineWorkstreamFilter, setTimelineWorkstreamFilter] = useState<string>("all");
   const [timelineDueWindowFilter, setTimelineDueWindowFilter] = useState<DueWindowFilter>("All");
   const [timelineSortOption, setTimelineSortOption] = useState<TimelineSortOption>("Planned Date");
+  const [reportGeneratedAt, setReportGeneratedAt] = useState<string>(() => new Date().toISOString());
   const [message, setMessage] = useState<Message>({
     tone: "info",
     text: "Create a new local project file or open an existing .pmgov file to begin.",
@@ -225,6 +243,7 @@ export function ProjectFileWorkspace() {
     setLastSavedSnapshot(null);
     setOpenedFileName(null);
     setActiveView("Dashboard");
+    setReportGeneratedAt(new Date().toISOString());
     setMessage({ tone: "success", text: "New in-memory project created. Use Save As to write a .pmgov file." });
   }
 
@@ -253,6 +272,7 @@ export function ProjectFileWorkspace() {
     setLastSavedSnapshot(snapshot);
     setOpenedFileName(selectedFile.name);
     setActiveView("Dashboard");
+    setReportGeneratedAt(new Date().toISOString());
     setMessage({ tone: "success", text: `${selectedFile.name} opened and validated locally.` });
   }
 
@@ -655,6 +675,97 @@ export function ProjectFileWorkspace() {
     );
   }
 
+
+  function buildExecutiveReportData(file: PmgovFile, generatedAt = reportGeneratedAt): ExecutiveReportData {
+    const today = todayIsoDate();
+    const attentionMilestones = file.milestones
+      .map((milestone) => ({ milestone, ...getMilestoneContext(file, milestone), daysUntilPlanned: daysBetween(today, milestone.plannedDate), reasons: getMilestoneAttentionReasons(milestone, today) }))
+      .filter((item) => item.reasons.length > 0)
+      .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER));
+    const upcomingMilestones = file.milestones
+      .filter((milestone) => milestone.status !== "complete")
+      .map((milestone) => ({ milestone, ...getMilestoneContext(file, milestone), daysUntilPlanned: daysBetween(today, milestone.plannedDate) }))
+      .filter((item) => item.daysUntilPlanned !== null && item.daysUntilPlanned >= 0)
+      .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER))
+      .slice(0, 8);
+    const openActions = file.actions
+      .filter((action) => action.status !== "completed" && action.status !== "cancelled")
+      .map((action) => ({ action, daysUntilDue: daysBetween(today, action.dueDate) }))
+      .sort((a, b) => (a.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilDue ?? Number.MAX_SAFE_INTEGER));
+    const recentDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate)).slice(0, 8);
+    const statusCounts = file.workstreams.reduce<Record<WorkstreamStatus, number>>(
+      (counts, workstream) => ({ ...counts, [workstream.status]: counts[workstream.status] + 1 }),
+      { not_set: 0, green: 0, amber: 0, red: 0, complete: 0 },
+    );
+
+    return { generatedAt, attentionMilestones, upcomingMilestones, openActions, recentDecisions, statusCounts };
+  }
+
+  function formatReportGeneratedAt(value: string) {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  }
+
+  function buildExecutiveReportMarkdown(file: PmgovFile, data: ExecutiveReportData) {
+    const lineItems = (items: string[], emptyText: string) => (items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : emptyText);
+    const workstreamItems = file.workstreams.map((workstream) => `- ${workstream.name}: ${statusLabel(workstream.status)}${workstream.commentary ? ` — ${workstream.commentary}` : ""}`);
+    const attentionItems = data.attentionMilestones.map(({ milestone, workstream, stage, reasons }) => `- ${milestone.name} (${workstream?.name ?? "Unassigned workstream"} / ${stage?.name ?? "Unassigned stage"}): ${reasons?.join("; ") ?? "Requires attention"}.`);
+    const upcomingItems = data.upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => `- ${milestone.plannedDate} (${formatDateDistance(daysUntilPlanned)}): ${milestone.name} — ${workstream?.name ?? "Unassigned workstream"}.`);
+    const actionItems = data.openActions.map(({ action, daysUntilDue }) => `- ${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysUntilDue)})` : "No due date"}; Status: ${statusLabel(action.status)}.`);
+    const decisionItems = data.recentDecisions.map((decision) => `- ${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}. ${decision.decisionText}`);
+
+    return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${formatReportGeneratedAt(data.generatedAt)}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject status: ${statusLabel(file.project.status)}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+  }
+
+  async function copyReportMarkdown(file: PmgovFile, data: ExecutiveReportData) {
+    await navigator.clipboard.writeText(buildExecutiveReportMarkdown(file, data));
+    setMessage({ tone: "success", text: "Executive status report copied as Markdown." });
+  }
+
+  function regenerateReport() {
+    setReportGeneratedAt(new Date().toISOString());
+    setMessage({ tone: "success", text: "Executive status report regenerated from current in-memory project data." });
+  }
+
+  function renderExecutiveReportWorkspace(file: PmgovFile) {
+    const reportData = buildExecutiveReportData(file);
+    const workstreamHealth = file.workstreams.length === 0 ? "No workstreams captured." : `${reportData.statusCounts.green} green, ${reportData.statusCounts.amber} amber, ${reportData.statusCounts.red} red, ${reportData.statusCounts.complete} complete, ${reportData.statusCounts.not_set} not set.`;
+
+    return (
+      <section className="space-y-6" id="reports">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 print:hidden">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Reports</p>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-2xl font-bold">Executive Status Report</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Preview a read-only weekly report generated from the current local .pmgov data in browser memory. Reports are not saved as separate entities yet.</p>
+              <p className="mt-2 text-sm font-semibold text-slate-700">Generated {formatReportGeneratedAt(reportData.generatedAt)}</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={regenerateReport} type="button">Regenerate</button>
+              <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={() => copyReportMarkdown(file, reportData)} type="button">Copy Markdown</button>
+              <button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-800" onClick={() => window.print()} type="button">Print</button>
+            </div>
+          </div>
+        </div>
+
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm print:border-0 print:shadow-none" aria-label="Executive Status Report preview">
+          <h2 className="text-3xl font-bold">Executive Status Report</h2>
+          <p className="mt-2 text-sm text-slate-600">{file.project.name} · Generated {formatReportGeneratedAt(reportData.generatedAt)}</p>
+          <div className="mt-6 grid gap-5">
+            <section><h3 className="text-xl font-bold">Project Overview</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{file.project.description || "No project description captured."}</p><dl className="mt-3 grid gap-2 text-sm md:grid-cols-2"><div><dt className="font-semibold text-slate-500">Sponsor</dt><dd>{file.project.sponsor || "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Project Manager</dt><dd>{file.project.projectManager || "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Start Date</dt><dd>{file.project.startDate || "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Target Date</dt><dd>{file.project.targetDate || "Not set"}</dd></div></dl></section>
+            <section><h3 className="text-xl font-bold">Overall Status</h3><p className={`mt-2 inline-flex rounded-full border px-3 py-1 text-sm font-bold capitalize ${statusTone(file.project.status)}`}>{statusLabel(file.project.status)}</p></section>
+            <section><h3 className="text-xl font-bold">Key Risks / Attention Items</h3>{reportData.attentionMilestones.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No milestones requiring attention.</p> : <div className="mt-3 space-y-3">{reportData.attentionMilestones.map(({ milestone, workstream, stage, reasons }) => <div className="rounded-2xl bg-slate-50 p-4" key={milestone.id}><p className="font-semibold">{milestone.name}</p><p className="mt-1 text-sm text-slate-600">{workstream?.name ?? "Unassigned workstream"} · {stage?.name ?? "Unassigned stage"}</p><p className="mt-2 text-sm text-slate-700">{reasons?.join("; ")}.</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Milestone Outlook</h3>{reportData.upcomingMilestones.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No upcoming milestones captured.</p> : <div className="mt-3 space-y-3">{reportData.upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => <div className="rounded-2xl bg-slate-50 p-4" key={milestone.id}><p className="font-semibold">{milestone.name}</p><p className="mt-1 text-sm text-slate-600">{milestone.plannedDate} · {formatDateDistance(daysUntilPlanned)} · {workstream?.name ?? "Unassigned workstream"}</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Workstream Health</h3><p className="mt-2 text-sm text-slate-700">{workstreamHealth}</p>{file.workstreams.length > 0 ? <div className="mt-3 space-y-2">{file.workstreams.map((workstream) => <p className="rounded-2xl bg-slate-50 p-3 text-sm" key={workstream.id}><strong>{workstream.name}</strong>: {statusLabel(workstream.status)}{workstream.commentary ? ` — ${workstream.commentary}` : ""}</p>)}</div> : null}</section>
+            <section><h3 className="text-xl font-bold">Open Actions</h3>{reportData.openActions.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No open actions captured.</p> : <div className="mt-3 space-y-3">{reportData.openActions.map(({ action, daysUntilDue }) => <div className="rounded-2xl bg-slate-50 p-4" key={action.id}><p className="font-semibold">{action.description}</p><p className="mt-1 text-sm text-slate-600">Owner: {action.owner || "Unassigned"} · {action.dueDate ? formatDateDistance(daysUntilDue) : "No due date"} · {statusLabel(action.status)}</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Recent Decisions</h3>{reportData.recentDecisions.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No recent decisions captured.</p> : <div className="mt-3 space-y-3">{reportData.recentDecisions.map((decision) => <div className="rounded-2xl bg-slate-50 p-4" key={decision.id}><p className="font-semibold">{decision.title}</p><p className="mt-1 text-sm text-slate-600">{decision.decisionDate} · {decision.decisionMaker || "Decision maker not set"}</p><p className="mt-2 text-sm text-slate-700">{decision.decisionText}</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Executive Summary</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{file.project.executiveSummary || "No executive summary has been entered for this project."}</p></section>
+          </div>
+        </article>
+      </section>
+    );
+  }
+
   function renderPlaceholder(view: NavigationItem) {
     const descriptions: Record<NavigationItem, string> = {
       Dashboard: "Milestones requiring attention, upcoming milestones, workstream health, open actions, recent decisions, and the executive summary will appear here.",
@@ -769,6 +880,8 @@ export function ProjectFileWorkspace() {
                 renderTimelineWorkspace(projectFile)
               ) : activeView === "Governance" ? (
                 renderGovernanceWorkspace(projectFile)
+              ) : activeView === "Reports" ? (
+                renderExecutiveReportWorkspace(projectFile)
               ) : (
                 renderPlaceholder(activeView)
               )}
