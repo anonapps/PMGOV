@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0.0",
+  "fileMetadata": {
+    "createdAt": "2026-06-18T10:00:00.000Z",
+    "updatedAt": "2026-06-18T10:00:00.000Z",
+    "createdByAppVersion": "0.1.0"
+  },
+  "project": {
+    "id": "project-001",
+    "name": "CRM Migration",
+    "description": "Migration from legacy CRM to new SaaS CRM platform.",
+    "sponsor": "VP Sales Operations",
+    "projectManager": "Project Manager",
+    "startDate": "2026-06-01",
+    "targetDate": "2026-12-15",
+    "status": "amber",
+    "executiveSummary": "Project remains broadly on track, but data migration requires attention due to delayed mapping sign-off."
+  },
+  "workstreams": [
+    {
+      "id": "ws-tech",
+      "name": "Technology",
+      "description": "Platform and integration delivery.",
+      "status": "green",
+      "commentary": "Technical build progressing as planned.",
+      "sortOrder": 1
+    },
+    {
+      "id": "ws-data",
+      "name": "Data Migration",
+      "description": "Data mapping, cleansing and migration.",
+      "status": "amber",
+      "commentary": "Mapping sign-off delayed.",
+      "sortOrder": 2
+    }
+  ],
+  "stages": [
+    {
+      "id": "stage-tech-design",
+      "workstreamId": "ws-tech",
+      "name": "Design",
+      "status": "complete",
+      "sortOrder": 1
+    },
+    {
+      "id": "stage-data-design",
+      "workstreamId": "ws-data",
+      "name": "Design",
+      "status": "in_progress",
+      "sortOrder": 1
+    }
+  ],
+  "milestones": [
+    {
+      "id": "ms-uat-start",
+      "stageId": "stage-tech-design",
+      "name": "UAT Start",
+      "plannedDate": "2026-09-01",
+      "forecastDate": "2026-09-08",
+      "status": "amber",
+      "commentary": "Forecast moved by one week pending data readiness."
+    }
+  ],
+  "notes": [
+    {
+      "id": "note-steerco-001",
+      "title": "Steering Committee - 18 Jun 2026",
+      "type": "meeting",
+      "content": "Data mapping sign-off delayed. John to confirm revised plan by Friday.",
+      "tags": [
+        "steerco"
+      ],
+      "createdAt": "2026-06-18T10:00:00.000Z",
+      "updatedAt": "2026-06-18T10:00:00.000Z"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "dec-001",
+      "title": "Maintain go-live date",
+      "context": "Despite UAT forecast movement, sponsor wants to maintain go-live date.",
+      "decisionText": "Go-live date remains unchanged pending next checkpoint.",
+      "decisionMaker": "Sponsor",
+      "decisionDate": "2026-06-18",
+      "impact": "medium",
+      "evidenceLinks": []
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-001",
+      "description": "Confirm revised data mapping plan",
+      "owner": "John",
+      "dueDate": "2026-06-21",
+      "status": "open"
+    }
+  ],
+  "links": [
+    {
+      "id": "link-001",
+      "sourceType": "note",
+      "sourceId": "note-steerco-001",
+      "targetType": "action",
+      "targetId": "act-001",
+      "relationship": "created_from"
+    }
+  ]
+}
