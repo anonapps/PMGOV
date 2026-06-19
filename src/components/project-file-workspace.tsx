@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useMemo, useRef, useState } from "react";
-import type { Milestone, MilestoneStatus, PmgovFile, Project, RagStatus, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
+import type { Milestone, MilestoneStatus, PmgovFile, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
 import {
   buildPmgovFilename,
   createEmptyProjectFile,
@@ -12,13 +12,95 @@ import {
 } from "@/lib/pmgov";
 
 const navigationItems = ["Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Reports", "Settings"] as const;
-const statuses: RagStatus[] = ["not_set", "green", "amber", "red"];
 const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", "blocked"];
 const milestoneStatuses: MilestoneStatus[] = ["not_set", "green", "amber", "red", "complete"];
 
 type NavigationItem = (typeof navigationItems)[number];
 type Message = { tone: "success" | "error" | "info"; text: string };
+
+
+type DashboardMilestone = {
+  milestone: Milestone;
+  stage?: Stage;
+  workstream?: Workstream;
+  reasons: string[];
+  daysUntilPlanned: number | null;
+};
+
+type DashboardAction = {
+  action: PmgovFile["actions"][number];
+  daysUntilDue: number | null;
+};
+
+function getMilestoneContext(file: PmgovFile, milestone: Milestone) {
+  const stage = file.stages.find((item) => item.id === milestone.stageId);
+  const workstream = stage ? file.workstreams.find((item) => item.id === stage.workstreamId) : undefined;
+
+  return { stage, workstream };
+}
+
+function getMilestoneAttentionReasons(milestone: Milestone, today = todayIsoDate()) {
+  const reasons: string[] = [];
+  const daysUntilPlanned = daysBetween(today, milestone.plannedDate);
+  const daysUntilForecast = daysBetween(today, milestone.forecastDate);
+  const forecastVariance = daysBetween(milestone.plannedDate, milestone.forecastDate);
+  const isComplete = milestone.status === "complete";
+
+  if (milestone.status === "amber" || milestone.status === "red") {
+    reasons.push(`${statusLabel(milestone.status)} status`);
+  }
+
+  if (forecastVariance !== null && forecastVariance > 0) {
+    reasons.push("forecast is later than planned");
+  }
+
+  if (!isComplete && daysUntilPlanned !== null && daysUntilPlanned >= 0 && daysUntilPlanned <= 30) {
+    reasons.push("planned date is due within 30 days");
+  }
+
+  if (!isComplete && daysUntilForecast !== null && daysUntilForecast >= 0 && daysUntilForecast <= 30) {
+    reasons.push("forecast date is due within 30 days");
+  }
+
+  if (!isComplete && daysUntilPlanned !== null && daysUntilPlanned < 0) {
+    reasons.push("planned date is in the past");
+  }
+
+  if (!isComplete && daysUntilForecast !== null && daysUntilForecast < 0) {
+    reasons.push("forecast date is in the past");
+  }
+
+  return reasons;
+}
+
+function formatDateDistance(days: number | null) {
+  if (days === null) {
+    return "No date";
+  }
+
+  if (days === 0) {
+    return "Today";
+  }
+
+  return days > 0 ? `In ${days} day${days === 1 ? "" : "s"}` : `${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} overdue`;
+}
+
+function statusTone(status: string) {
+  if (status === "red" || status === "blocked") {
+    return "border-red-200 bg-red-50 text-red-800";
+  }
+
+  if (status === "amber" || status === "in_progress") {
+    return "border-amber-200 bg-amber-50 text-amber-800";
+  }
+
+  if (status === "green" || status === "complete") {
+    return "border-green-200 bg-green-50 text-green-800";
+  }
+
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
 
 
 function todayIsoDate() {
@@ -176,22 +258,6 @@ export function ProjectFileWorkspace() {
     setMessage({ tone: "success", text: `${filename} saved from browser memory. No project data was sent to a server.` });
   }
 
-  function updateProject<K extends keyof Project>(key: K, value: Project[K]) {
-    setProjectFile((current) => {
-      if (!current) {
-        return current;
-      }
-
-      return {
-        ...current,
-        project: {
-          ...current.project,
-          [key]: value,
-        },
-      };
-    });
-  }
-
 
   function mutateProjectFile(updater: (current: PmgovFile) => PmgovFile, successText: string) {
     setProjectFile((current) => {
@@ -321,6 +387,72 @@ export function ProjectFileWorkspace() {
     );
   }
 
+  function renderDashboard(file: PmgovFile) {
+    const today = todayIsoDate();
+    const attentionMilestones: DashboardMilestone[] = file.milestones
+      .map((milestone) => ({
+        milestone,
+        ...getMilestoneContext(file, milestone),
+        reasons: getMilestoneAttentionReasons(milestone, today),
+        daysUntilPlanned: daysBetween(today, milestone.plannedDate),
+      }))
+      .filter((item) => item.reasons.length > 0)
+      .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER));
+    const upcomingMilestones = file.milestones
+      .filter((milestone) => milestone.status !== "complete")
+      .map((milestone) => ({ milestone, ...getMilestoneContext(file, milestone), daysUntilPlanned: daysBetween(today, milestone.plannedDate) }))
+      .filter((item) => item.daysUntilPlanned !== null && item.daysUntilPlanned >= 0)
+      .sort((a, b) => (a.daysUntilPlanned ?? 0) - (b.daysUntilPlanned ?? 0))
+      .slice(0, 6);
+    const openActions: DashboardAction[] = file.actions
+      .filter((action) => action.status !== "complete" && action.status !== "cancelled")
+      .map((action) => ({ action, daysUntilDue: daysBetween(today, action.dueDate) }))
+      .sort((a, b) => (a.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilDue ?? Number.MAX_SAFE_INTEGER));
+    const recentDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate)).slice(0, 5);
+    const statusCounts = file.workstreams.reduce<Record<WorkstreamStatus, number>>(
+      (counts, workstream) => ({ ...counts, [workstream.status]: counts[workstream.status] + 1 }),
+      { not_set: 0, green: 0, amber: 0, red: 0, complete: 0 },
+    );
+
+    return (
+      <div className="grid gap-6" id="dashboard">
+        <section className="rounded-3xl border border-slate-200 bg-white p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Weekly review</p>
+              <h3 className="mt-2 text-2xl font-bold">Dashboard</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Review milestone attention, upcoming dates, workstream health, open actions, recent decisions, and the executive summary from the current local project file.</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button className="rounded-2xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800" onClick={createNewProject} type="button">Create New Project</button>
+              <button className="rounded-2xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-800 transition hover:border-blue-300 hover:bg-blue-50" onClick={() => fileInputRef.current?.click()} type="button">Open .pmgov File</button>
+            </div>
+          </div>
+          <p className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-medium text-blue-900">Your project data is stored only in the file you open or save.</p>
+        </section>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-6">
+          <h3 className="text-xl font-bold">Milestones requiring attention</h3>
+          {attentionMilestones.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No milestones currently meet the dashboard attention rules.</p> : (
+            <div className="mt-4 grid gap-3">{attentionMilestones.map(({ milestone, stage, workstream, reasons, daysUntilPlanned }) => <article className="rounded-2xl border border-slate-200 p-4" key={milestone.id}><div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between"><div><h4 className="font-bold">{milestone.name}</h4><p className="mt-1 text-sm text-slate-600">{workstream?.name ?? "Unassigned workstream"} · {stage?.name ?? "Unassigned stage"}</p></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(milestone.status)}`}>{statusLabel(milestone.status)}</span></div><p className="mt-3 text-sm text-slate-700">{reasons.join("; ")}.</p><p className="mt-2 text-xs font-semibold text-slate-500">Planned {milestone.plannedDate} · {formatDateDistance(daysUntilPlanned)} · {formatVariance(milestone)}</p></article>)}</div>
+          )}
+        </section>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Upcoming milestones</h3>{upcomingMilestones.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No upcoming incomplete milestones are scheduled.</p> : <div className="mt-4 space-y-3">{upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => <div className="rounded-2xl bg-slate-50 p-4" key={milestone.id}><p className="font-semibold">{milestone.name}</p><p className="mt-1 text-sm text-slate-600">{workstream?.name ?? "Unassigned workstream"} · {milestone.plannedDate} · {formatDateDistance(daysUntilPlanned)}</p></div>)}</div>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Workstream health</h3>{file.workstreams.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No workstreams yet. Add workstreams to see health distribution.</p> : <><dl className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">{workstreamStatuses.map((status) => <div className={`rounded-2xl border p-3 ${statusTone(status)}`} key={status}><dt className="text-xs font-bold uppercase">{statusLabel(status)}</dt><dd className="mt-2 text-2xl font-bold">{statusCounts[status]}</dd></div>)}</dl><div className="mt-4 space-y-2">{file.workstreams.map((workstream) => <p className="flex justify-between rounded-2xl bg-slate-50 p-3 text-sm" key={workstream.id}><span className="font-semibold">{workstream.name}</span><span>{statusLabel(workstream.status)}</span></p>)}</div></>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Open actions</h3>{openActions.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No open or overdue actions.</p> : <div className="mt-4 space-y-3">{openActions.map(({ action, daysUntilDue }) => <div className="rounded-2xl bg-slate-50 p-4" key={action.id}><p className="font-semibold">{action.description}</p><p className="mt-1 text-sm text-slate-600">Owner: {action.owner || "Unassigned"} · {action.dueDate ? formatDateDistance(daysUntilDue) : "No due date"} · {statusLabel(action.status)}</p></div>)}</div>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Recent decisions</h3>{recentDecisions.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No decisions captured yet.</p> : <div className="mt-4 space-y-3">{recentDecisions.map((decision) => <div className="rounded-2xl bg-slate-50 p-4" key={decision.id}><p className="font-semibold">{decision.title}</p><p className="mt-1 text-sm text-slate-600">{decision.decisionDate} · {decision.decisionMaker || "Decision maker not set"}</p><p className="mt-2 text-sm text-slate-700">{decision.decisionText}</p></div>)}</div>}</section>
+        </div>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-6">
+          <h3 className="text-xl font-bold">Executive summary</h3>
+          {file.project.executiveSummary ? <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">{file.project.executiveSummary}</p> : <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No executive summary has been entered for this project.</p>}
+        </section>
+      </div>
+    );
+  }
+
   function renderPlaceholder(view: NavigationItem) {
     const descriptions: Record<NavigationItem, string> = {
       Dashboard: "Milestones requiring attention, upcoming milestones, workstream health, open actions, recent decisions, and the executive summary will appear here.",
@@ -428,23 +560,7 @@ export function ProjectFileWorkspace() {
               </div>
 
               {activeView === "Dashboard" ? (
-                <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-                  <section className="rounded-3xl border border-slate-200 bg-white p-6">
-                    <h3 className="text-xl font-bold">Project details</h3>
-                    <div className="mt-5 grid gap-4 md:grid-cols-2">
-                      <label className="text-sm font-medium text-slate-700">Project name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-950 outline-none focus:border-blue-500" onChange={(event) => updateProject("name", event.target.value)} value={projectFile.project.name} /></label>
-                      <label className="text-sm font-medium text-slate-700">Project manager<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-950 outline-none focus:border-blue-500" onChange={(event) => updateProject("projectManager", event.target.value)} value={projectFile.project.projectManager} /></label>
-                      <label className="text-sm font-medium text-slate-700">Sponsor<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-950 outline-none focus:border-blue-500" onChange={(event) => updateProject("sponsor", event.target.value)} value={projectFile.project.sponsor ?? ""} /></label>
-                      <label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-950 outline-none focus:border-blue-500" onChange={(event) => updateProject("status", event.target.value as RagStatus)} value={projectFile.project.status}>{statuses.map((status) => (<option key={status} value={status}>{status.replace("_", " ")}</option>))}</select></label>
-                      <label className="text-sm font-medium text-slate-700 md:col-span-2">Executive summary<textarea className="mt-2 min-h-28 w-full rounded-2xl border border-slate-300 px-4 py-3 text-slate-950 outline-none focus:border-blue-500" onChange={(event) => updateProject("executiveSummary", event.target.value)} value={projectFile.project.executiveSummary ?? ""} /></label>
-                    </div>
-                  </section>
-                  <section className="rounded-3xl border border-slate-200 bg-white p-6">
-                    <h3 className="text-xl font-bold">Governance data model</h3>
-                    <dl className="mt-5 grid grid-cols-2 gap-3">{countRecords(projectFile).map(([label, count]) => (<div className="rounded-2xl bg-slate-50 p-4" key={label}><dt className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</dt><dd className="mt-2 text-2xl font-bold">{count}</dd></div>))}</dl>
-                  </section>
-                  {renderPlaceholder("Dashboard")}
-                </div>
+                renderDashboard(projectFile)
               ) : activeView === "Workstreams" ? (
                 renderWorkstreamsWorkspace(projectFile)
               ) : (
