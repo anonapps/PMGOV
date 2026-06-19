@@ -169,6 +169,13 @@
         },
         "sortOrder": {
           "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date"
         }
       }
     },
@@ -203,6 +210,16 @@
         },
         "sortOrder": {
           "type": "number"
+        },
+        "description": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date"
         }
       }
     },
@@ -251,6 +268,13 @@
         },
         "commentary": {
           "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date"
         }
       }
     },

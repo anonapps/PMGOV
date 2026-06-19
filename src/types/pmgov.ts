@@ -45,6 +45,8 @@ export interface Workstream {
   name: string;
   description?: string;
   status: WorkstreamStatus;
+  owner?: string;
+  targetDate?: string;
   commentary?: string;
   sortOrder: number;
 }
@@ -53,7 +55,10 @@ export interface Stage {
   id: string;
   workstreamId: string;
   name: string;
+  description?: string;
   status?: StageStatus;
+  owner?: string;
+  targetDate?: string;
   commentary?: string;
   sortOrder: number;
 }
@@ -63,6 +68,8 @@ export interface Milestone {
   stageId: string;
   name: string;
   description?: string;
+  owner?: string;
+  targetDate?: string;
   plannedDate: string;
   forecastDate?: string;
   actualDate?: string;
