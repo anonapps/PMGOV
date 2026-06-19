@@ -69,6 +69,7 @@ function countRecords(file: PmgovFile) {
     ["Notes", file.notes.length],
     ["Decisions", file.decisions.length],
     ["Actions", file.actions.length],
+    ["Links", file.links.length],
     ["Reports", file.reports.length],
   ] as const;
 }

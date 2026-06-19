@@ -9,3 +9,4 @@
 - Task 02 implements Save As with a browser Blob download only. Direct overwrite through File System Access API is deferred because Task 02 explicitly requires Save As and local-only persistence.
 - Task 03 keeps page content as placeholders only and retains Task 02 file lifecycle in the shared shell to avoid implementing Workstreams, Notebook, Governance, Dashboard, or Reports behavior early.
 - Save and Save As both use explicit browser downloads because there is no persistent file handle without adopting additional browser APIs; no project data is sent to a backend.
+- Conflict resolution retained both Task 02 and Task 03 decisions, including reports support and the shell/navigation placeholders.
