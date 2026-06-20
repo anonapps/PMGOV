@@ -209,3 +209,85 @@ export function buildPmgovFilename(projectName: string): string {
 
   return `${safeName}.pmgov`;
 }
+
+export function daysBetween(startDate: string, endDate?: string) {
+  if (!endDate) {
+    return null;
+  }
+
+  const start = new Date(`${startDate}T00:00:00Z`).getTime();
+  const end = new Date(`${endDate}T00:00:00Z`).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return null;
+  }
+
+  return Math.round((end - start) / 86_400_000);
+}
+
+export function statusLabel(status: string) {
+  return status.replaceAll("_", " ");
+}
+
+export function formatDateDistance(days: number | null) {
+  if (days === null) return "No date";
+  if (days === 0) return "Today";
+  return days > 0 ? `In ${days} day${days === 1 ? "" : "s"}` : `${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} overdue`;
+}
+
+export function formatMilestoneVariance(milestone: Pick<PmgovFile["milestones"][number], "plannedDate" | "forecastDate" | "actualDate">) {
+  const comparisonDate = milestone.actualDate || milestone.forecastDate;
+  const variance = daysBetween(milestone.plannedDate, comparisonDate);
+
+  if (variance === null) return "No forecast/actual date";
+  if (variance === 0) return "On plan";
+  return `${Math.abs(variance)} day${Math.abs(variance) === 1 ? "" : "s"} ${variance > 0 ? "late" : "early"}`;
+}
+
+export function getMilestoneAttentionReasons(milestone: PmgovFile["milestones"][number], today: string) {
+  const reasons: string[] = [];
+  const daysUntilPlanned = daysBetween(today, milestone.plannedDate);
+  const daysUntilForecast = daysBetween(today, milestone.forecastDate);
+  const forecastVariance = daysBetween(milestone.plannedDate, milestone.forecastDate);
+  const isComplete = milestone.status === "complete";
+
+  if (milestone.status === "amber" || milestone.status === "red") reasons.push(`${statusLabel(milestone.status)} status`);
+  if (forecastVariance !== null && forecastVariance > 0) reasons.push("forecast is later than planned");
+  if (!isComplete && daysUntilPlanned !== null && daysUntilPlanned >= 0 && daysUntilPlanned <= 30) reasons.push("planned date is due within 30 days");
+  if (!isComplete && daysUntilForecast !== null && daysUntilForecast >= 0 && daysUntilForecast <= 30) reasons.push("forecast date is due within 30 days");
+  if (!isComplete && daysUntilPlanned !== null && daysUntilPlanned < 0) reasons.push("planned date is in the past");
+  if (!isComplete && daysUntilForecast !== null && daysUntilForecast < 0) reasons.push("forecast date is in the past");
+
+  return reasons;
+}
+
+export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: string, today: string) {
+  const lineItems = (items: string[], emptyText: string) => (items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : emptyText);
+  const milestoneContext = (stageId: string) => {
+    const stage = file.stages.find((item) => item.id === stageId);
+    const workstream = stage ? file.workstreams.find((item) => item.id === stage.workstreamId) : undefined;
+    return { stage, workstream };
+  };
+  const attentionItems = file.milestones
+    .map((milestone) => ({ milestone, ...milestoneContext(milestone.stageId), reasons: getMilestoneAttentionReasons(milestone, today), daysUntilPlanned: daysBetween(today, milestone.plannedDate) }))
+    .filter((item) => item.reasons.length > 0)
+    .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER))
+    .map(({ milestone, workstream, stage, reasons }) => `${milestone.name} (${workstream?.name ?? "Unassigned workstream"} / ${stage?.name ?? "Unassigned stage"}): ${reasons.join("; ")}.`);
+  const upcomingItems = file.milestones
+    .filter((milestone) => milestone.status !== "complete")
+    .map((milestone) => ({ milestone, ...milestoneContext(milestone.stageId), daysUntilPlanned: daysBetween(today, milestone.plannedDate) }))
+    .filter((item) => item.daysUntilPlanned !== null && item.daysUntilPlanned >= 0)
+    .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER))
+    .slice(0, 8)
+    .map(({ milestone, workstream, daysUntilPlanned }) => `${milestone.plannedDate} (${formatDateDistance(daysUntilPlanned)}): ${milestone.name} — ${workstream?.name ?? "Unassigned workstream"}.`);
+  const workstreamItems = file.workstreams.map((workstream) => `${workstream.name}: ${statusLabel(workstream.status)}${workstream.commentary ? ` — ${workstream.commentary}` : ""}`);
+  const actionItems = file.actions
+    .filter((action) => action.status !== "completed" && action.status !== "cancelled")
+    .map((action) => `${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysBetween(today, action.dueDate))})` : "No due date"}; Status: ${statusLabel(action.status)}.`);
+  const decisionItems = [...file.decisions]
+    .sort((a, b) => b.decisionDate.localeCompare(a.decisionDate))
+    .slice(0, 8)
+    .map((decision) => `${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}. ${decision.decisionText}`);
+
+  return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject status: ${statusLabel(file.project.status)}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+}
