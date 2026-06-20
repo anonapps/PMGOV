@@ -24,6 +24,9 @@ function fixture(): PmgovFile {
   file.actions.push({ id: "a-1", description: "Confirm launch owner", owner: "", dueDate: "2026-06-18", status: "open" });
   file.dependencies.push({ id: "dep-1", title: "API contract", description: "Need interface signed off", sourceWorkstreamId: "ws-1", targetWorkstreamId: "ws-1", owner: "Grace", dueDate: "2026-06-19", status: "blocked", commentary: "Waiting on vendor" });
   file.decisions.push({ id: "d-1", title: "Use local files", decisionText: "No backend for MVP.", decisionDate: "2026-06-10" });
+  file.risks.push({ id: "r-1", title: "Vendor delay", description: "Supplier may miss onboarding.", owner: "Grace", probability: "high", impact: "high", mitigation: "Escalate weekly", status: "open", relatedWorkstreamId: "ws-1", relatedMilestoneId: "ms-1" });
+  file.assumptions.push({ id: "as-1", title: "Funding approved", description: "Budget remains available.", owner: "Ada", validationDate: "2026-06-30", status: "invalidated", relatedWorkstreamId: "ws-1" });
+  file.issues.push({ id: "i-1", title: "Production outage", description: "Critical service unavailable.", owner: "Lin", severity: "critical", status: "open", targetResolutionDate: "2026-06-21", relatedWorkstreamId: "ws-1", relatedMilestoneId: "ms-1" });
   return file;
 }
 
@@ -63,6 +66,11 @@ test("executive report Markdown includes attention, actions, decisions, and empt
   assert.match(markdown, /Pilot \(Delivery \/ Build\): amber status; forecast is later than planned/);
   assert.match(markdown, /Confirm launch owner/);
   assert.match(markdown, /Use local files/);
+  assert.match(markdown, /RAID Summary/);
+  assert.match(markdown, /Top Risks/);
+  assert.match(markdown, /Open Issues/);
+  assert.match(markdown, /Vendor delay/);
+  assert.match(markdown, /Production outage/);
   assert.match(markdown, /Dependency Summary/);
   assert.match(markdown, /Blocked Dependencies/);
   assert.match(markdown, /API contract/);
@@ -88,13 +96,19 @@ test("automated health calculates project and workstream status with manual over
 });
 
 
-test("existing files without dependencies remain valid and default to an empty list", () => {
+test("existing files without dependencies or RAID records remain valid and default to empty lists", () => {
   const file = fixture();
   const legacy = JSON.parse(serializePmgovFile(file));
   delete legacy.dependencies;
+  delete legacy.risks;
+  delete legacy.assumptions;
+  delete legacy.issues;
   const parsed = validatePmgovFile(legacy);
   assert.equal(parsed.success, true);
   if (parsed.success) {
     assert.deepEqual(parsed.data.dependencies, []);
+    assert.deepEqual(parsed.data.risks, []);
+    assert.deepEqual(parsed.data.assumptions, []);
+    assert.deepEqual(parsed.data.issues, []);
   }
 });

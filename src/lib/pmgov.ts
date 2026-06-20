@@ -15,6 +15,11 @@ const stageStatusSchema = z.enum(["not_started", "in_progress", "complete", "blo
 const milestoneStatusSchema = z.enum(["green", "amber", "red", "not_set", "complete"]);
 const actionStatusSchema = z.enum(["open", "in_progress", "completed", "cancelled"]);
 const dependencyStatusSchema = z.enum(["open", "in_progress", "resolved", "blocked"]);
+const raidLevelSchema = z.enum(["low", "medium", "high"]);
+const riskStatusSchema = z.enum(["open", "monitoring", "mitigated", "closed"]);
+const assumptionStatusSchema = z.enum(["active", "validated", "invalidated"]);
+const issueSeveritySchema = z.enum(["low", "medium", "high", "critical"]);
+const issueStatusSchema = z.enum(["open", "investigating", "resolved", "closed"]);
 const noteTypeSchema = z.enum(["meeting", "workshop", "general"]);
 const impactLevelSchema = z.enum(["low", "medium", "high", "critical", "not_set"]);
 const entityTypeSchema = z.enum(["note", "decision", "action", "milestone", "workstream", "stage"]);
@@ -123,6 +128,45 @@ export const pmgovFileSchema = z.object({
       commentary: z.string().optional(),
     }),
   ).default([]),
+
+  risks: z.array(
+    z.object({
+      id: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string(),
+      owner: z.string(),
+      probability: raidLevelSchema,
+      impact: raidLevelSchema,
+      mitigation: z.string(),
+      status: riskStatusSchema,
+      relatedWorkstreamId: z.string().optional(),
+      relatedMilestoneId: z.string().optional(),
+    }),
+  ).default([]),
+  assumptions: z.array(
+    z.object({
+      id: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string(),
+      owner: z.string(),
+      validationDate: isoDate,
+      status: assumptionStatusSchema,
+      relatedWorkstreamId: z.string().optional(),
+    }),
+  ).default([]),
+  issues: z.array(
+    z.object({
+      id: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string(),
+      owner: z.string(),
+      severity: issueSeveritySchema,
+      status: issueStatusSchema,
+      targetResolutionDate: isoDate,
+      relatedWorkstreamId: z.string().optional(),
+      relatedMilestoneId: z.string().optional(),
+    }),
+  ).default([]),
   links: z.array(
     z.object({
       id: z.string().min(1),
@@ -175,6 +219,9 @@ export function createEmptyProjectFile(): PmgovFile {
     decisions: [],
     actions: [],
     dependencies: [],
+    risks: [],
+    assumptions: [],
+    issues: [],
     links: [],
     reports: [],
   };
@@ -380,6 +427,13 @@ export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstrea
   redReasons.push(...dependencyReasons.redReasons);
   amberReasons.push(...dependencyReasons.amberReasons);
 
+  const relatedRisks = file.risks.filter((risk) => risk.relatedWorkstreamId === workstream.id && risk.status !== "closed" && risk.status !== "mitigated");
+  const highRisks = relatedRisks.filter((risk) => risk.probability === "high" || risk.impact === "high");
+  if (highRisks.length > 1) redReasons.push(`Multiple high risks are open for workstream "${workstream.name}"`);
+  else if (highRisks.length === 1) amberReasons.push(`High risk "${highRisks[0].title}" is open`);
+  file.issues.filter((issue) => issue.relatedWorkstreamId === workstream.id && issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").forEach((issue) => redReasons.push(`Critical issue "${issue.title}" is open`));
+  file.assumptions.filter((assumption) => assumption.relatedWorkstreamId === workstream.id && assumption.status === "invalidated").forEach((assumption) => amberReasons.push(`Assumption "${assumption.title}" is invalidated`));
+
   const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : milestones.length > 0 || actions.length > 0 || dependencies.length > 0 ? "green" : "not_set";
   const mode = workstream.healthMode ?? "auto";
   const manualStatus = workstream.status === "complete" ? "green" : workstream.status;
@@ -423,6 +477,12 @@ export function calculateProjectHealth(file: PmgovFile, today: string): Calculat
   redReasons.push(...dependencyReasons.redReasons);
   amberReasons.push(...dependencyReasons.amberReasons);
 
+  const highRisks = file.risks.filter((risk) => risk.status !== "closed" && risk.status !== "mitigated" && (risk.probability === "high" || risk.impact === "high"));
+  if (highRisks.length > 1) redReasons.push("Multiple high risks are open");
+  else if (highRisks.length === 1) amberReasons.push(`High risk "${highRisks[0].title}" is open`);
+  file.issues.filter((issue) => issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").forEach((issue) => redReasons.push(`Critical issue "${issue.title}" is open`));
+  file.assumptions.filter((assumption) => assumption.status === "invalidated").forEach((assumption) => amberReasons.push(`Assumption "${assumption.title}" is invalidated`));
+
   const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : "green";
   const mode = file.project.healthMode ?? "auto";
 
@@ -462,6 +522,9 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
   const actionItems = file.actions
     .filter((action) => action.status !== "completed" && action.status !== "cancelled")
     .map((action) => `${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysBetween(today, action.dueDate))})` : "No due date"}; Status: ${statusLabel(action.status)}.`);
+  const raidSummaryItems = [`Open Risks: ${file.risks.filter((risk) => risk.status === "open" || risk.status === "monitoring").length}`, `High Risks: ${file.risks.filter((risk) => risk.status !== "closed" && risk.status !== "mitigated" && (risk.probability === "high" || risk.impact === "high")).length}`, `Open Issues: ${file.issues.filter((issue) => issue.status === "open" || issue.status === "investigating").length}`, `Critical Issues: ${file.issues.filter((issue) => issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").length}`, `Invalidated Assumptions: ${file.assumptions.filter((assumption) => assumption.status === "invalidated").length}`];
+  const topRiskItems = file.risks.filter((risk) => risk.status !== "closed" && risk.status !== "mitigated").sort((a, b) => (b.impact.localeCompare(a.impact) || b.probability.localeCompare(a.probability))).slice(0, 5).map((risk) => `${risk.title} — Owner: ${risk.owner || "Unassigned"}; Probability: ${statusLabel(risk.probability)}; Impact: ${statusLabel(risk.impact)}; Status: ${statusLabel(risk.status)}.`);
+  const openIssueItems = file.issues.filter((issue) => issue.status !== "resolved" && issue.status !== "closed").map((issue) => `${issue.title} — Owner: ${issue.owner || "Unassigned"}; Severity: ${statusLabel(issue.severity)}; Target: ${issue.targetResolutionDate}; Status: ${statusLabel(issue.status)}.`);
   const dependencySummaryItems = file.dependencies.map((dependency) => `${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate} (${formatDateDistance(daysBetween(today, dependency.dueDate))}); Status: ${statusLabel(dependency.status)}.`);
   const blockedDependencyItems = file.dependencies.filter((dependency) => dependency.status === "blocked").map((dependency) => `${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate}; ${dependency.commentary || "No commentary"}.`);
   const decisionItems = [...file.decisions]
@@ -470,5 +533,5 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
     .map((decision) => `${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}. ${decision.decisionText}`);
 
   return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject health: ${statusLabel(projectHealth.status)} (${statusLabel(projectHealth.mode)}${projectHealth.mode === "manual" ? ` override; auto would be ${statusLabel(projectHealth.calculatedStatus)}` : ""})
-Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Dependency Summary\n${lineItems(dependencySummaryItems, "No dependencies captured.")}\n\n## Blocked Dependencies\n${lineItems(blockedDependencyItems, "No blocked dependencies captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## RAID Summary\n${lineItems(raidSummaryItems, "No RAID records captured.")}\n\n## Top Risks\n${lineItems(topRiskItems, "No open risks captured.")}\n\n## Open Issues\n${lineItems(openIssueItems, "No open issues captured.")}\n\n## Dependency Summary\n${lineItems(dependencySummaryItems, "No dependencies captured.")}\n\n## Blocked Dependencies\n${lineItems(blockedDependencyItems, "No blocked dependencies captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
 }
