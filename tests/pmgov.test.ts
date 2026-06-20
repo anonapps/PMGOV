@@ -22,6 +22,7 @@ function fixture(): PmgovFile {
   file.stages.push({ id: "stage-1", workstreamId: "ws-1", name: "Build", status: "in_progress", sortOrder: 1 });
   file.milestones.push({ id: "ms-1", stageId: "stage-1", name: "Pilot", plannedDate: "2026-06-25", forecastDate: "2026-07-02", status: "amber" });
   file.actions.push({ id: "a-1", description: "Confirm launch owner", owner: "", dueDate: "2026-06-18", status: "open" });
+  file.dependencies.push({ id: "dep-1", title: "API contract", description: "Need interface signed off", sourceWorkstreamId: "ws-1", targetWorkstreamId: "ws-1", owner: "Grace", dueDate: "2026-06-19", status: "blocked", commentary: "Waiting on vendor" });
   file.decisions.push({ id: "d-1", title: "Use local files", decisionText: "No backend for MVP.", decisionDate: "2026-06-10" });
   return file;
 }
@@ -62,23 +63,38 @@ test("executive report Markdown includes attention, actions, decisions, and empt
   assert.match(markdown, /Pilot \(Delivery \/ Build\): amber status; forecast is later than planned/);
   assert.match(markdown, /Confirm launch owner/);
   assert.match(markdown, /Use local files/);
+  assert.match(markdown, /Dependency Summary/);
+  assert.match(markdown, /Blocked Dependencies/);
+  assert.match(markdown, /API contract/);
 });
 
 
 test("automated health calculates project and workstream status with manual override support", () => {
   const file = fixture();
   const workstreamHealth = calculateWorkstreamHealth(file, file.workstreams[0], "2026-06-20");
-  assert.equal(workstreamHealth.status, "amber");
-  assert.match(workstreamHealth.reasons.join("; "), /Pilot/);
+  assert.equal(workstreamHealth.status, "red");
+  assert.match(workstreamHealth.reasons.join("; "), /API contract/);
 
   const projectHealth = calculateProjectHealth(file, "2026-06-20");
-  assert.equal(projectHealth.status, "amber");
-  assert.match(projectHealth.reasons.join("; "), /open action|Action/);
+  assert.equal(projectHealth.status, "red");
+  assert.match(projectHealth.reasons.join("; "), /API contract|Delivery/);
 
   file.project.healthMode = "manual";
   file.project.status = "red";
   const overriddenProjectHealth = calculateProjectHealth(file, "2026-06-20");
   assert.equal(overriddenProjectHealth.status, "red");
-  assert.equal(overriddenProjectHealth.calculatedStatus, "amber");
+  assert.equal(overriddenProjectHealth.calculatedStatus, "red");
   assert.equal(overriddenProjectHealth.mode, "manual");
+});
+
+
+test("existing files without dependencies remain valid and default to an empty list", () => {
+  const file = fixture();
+  const legacy = JSON.parse(serializePmgovFile(file));
+  delete legacy.dependencies;
+  const parsed = validatePmgovFile(legacy);
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.deepEqual(parsed.data.dependencies, []);
+  }
 });

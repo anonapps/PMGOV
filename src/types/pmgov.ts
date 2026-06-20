@@ -3,6 +3,7 @@ export type WorkstreamStatus = RagStatus | "complete";
 export type StageStatus = "not_started" | "in_progress" | "complete" | "blocked";
 export type MilestoneStatus = RagStatus | "complete";
 export type ActionStatus = "open" | "in_progress" | "completed" | "cancelled";
+export type DependencyStatus = "open" | "in_progress" | "resolved" | "blocked";
 export type NoteType = "meeting" | "workshop" | "general";
 export type ImpactLevel = "low" | "medium" | "high" | "critical" | "not_set";
 export type EntityType = "note" | "decision" | "action" | "milestone" | "workstream" | "stage";
@@ -19,6 +20,7 @@ export interface PmgovFile {
   notes: Note[];
   decisions: Decision[];
   actions: ActionItem[];
+  dependencies: Dependency[];
   links: EntityLink[];
   reports: Report[];
 }
@@ -101,6 +103,20 @@ export interface ActionItem {
   owner: string;
   dueDate?: string;
   status: ActionStatus;
+  commentary?: string;
+}
+
+export interface Dependency {
+  id: string;
+  title: string;
+  description: string;
+  sourceWorkstreamId: string;
+  sourceMilestoneId?: string;
+  targetWorkstreamId: string;
+  targetMilestoneId?: string;
+  owner: string;
+  dueDate: string;
+  status: DependencyStatus;
   commentary?: string;
 }
 

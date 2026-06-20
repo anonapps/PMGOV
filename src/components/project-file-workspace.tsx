@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useMemo, useRef, useState } from "react";
-import type { ActionItem, ActionStatus, Decision, EntityLink, EntityType, HealthMode, ImpactLevel, Milestone, MilestoneStatus, Note, NoteType, PmgovFile, RagStatus, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
+import type { ActionItem, ActionStatus, Decision, Dependency, DependencyStatus, EntityLink, EntityType, HealthMode, ImpactLevel, Milestone, MilestoneStatus, Note, NoteType, PmgovFile, RagStatus, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
 import {
   buildPmgovFilename,
   calculateProjectHealth,
@@ -13,13 +13,14 @@ import {
   validatePmgovFile,
 } from "@/lib/pmgov";
 
-const navigationItems = ["Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Reports", "Settings"] as const;
+const navigationItems = ["Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Dependencies", "Reports", "Settings"] as const;
 const projectStatuses: RagStatus[] = ["not_set", "green", "amber", "red"];
 const healthModes: HealthMode[] = ["auto", "manual"];
 const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", "blocked"];
 const milestoneStatuses: MilestoneStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const actionStatuses: ActionStatus[] = ["open", "in_progress", "completed", "cancelled"];
+const dependencyStatuses: DependencyStatus[] = ["open", "in_progress", "resolved", "blocked"];
 const noteTypes: NoteType[] = ["meeting", "workshop", "general"];
 const impactLevels: ImpactLevel[] = ["low", "medium", "high", "critical"];
 const dueWindowOptions = ["All", "Overdue", "Next 30 days", "Completed"] as const;
@@ -67,6 +68,8 @@ type ExecutiveReportData = {
   attentionMilestones: ReportMilestone[];
   upcomingMilestones: ReportMilestone[];
   openActions: DashboardAction[];
+  dependencies: Dependency[];
+  blockedDependencies: Dependency[];
   recentDecisions: Decision[];
   workstreamHealth: { workstream: Workstream; health: ReturnType<typeof calculateWorkstreamHealth> }[];
   projectHealth: ReturnType<typeof calculateProjectHealth>;
@@ -196,6 +199,7 @@ function countRecords(file: PmgovFile) {
     ["Notes", file.notes.length],
     ["Decisions", file.decisions.length],
     ["Actions", file.actions.length],
+    ["Dependencies", file.dependencies.length],
     ["Links", file.links.length],
     ["Reports", file.reports.length],
   ] as const;
@@ -284,6 +288,9 @@ export function ProjectFileWorkspace() {
   const [timelineWorkstreamFilter, setTimelineWorkstreamFilter] = useState<string>("all");
   const [timelineDueWindowFilter, setTimelineDueWindowFilter] = useState<DueWindowFilter>("All");
   const [timelineSortOption, setTimelineSortOption] = useState<TimelineSortOption>("Planned Date");
+  const [dependencyStatusFilter, setDependencyStatusFilter] = useState<DependencyStatus | "all">("all");
+  const [dependencyWorkstreamFilter, setDependencyWorkstreamFilter] = useState("all");
+  const [dependencySearchQuery, setDependencySearchQuery] = useState("");
   const [reportGeneratedAt, setReportGeneratedAt] = useState<string>(() => new Date().toISOString());
   const [message, setMessage] = useState<Message>({
     tone: "info",
@@ -543,6 +550,9 @@ export function ProjectFileWorkspace() {
       .filter((action) => action.status !== "completed" && action.status !== "cancelled")
       .map((action) => ({ action, daysUntilDue: daysBetween(today, action.dueDate) }))
       .sort((a, b) => (a.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilDue ?? Number.MAX_SAFE_INTEGER));
+    const openDependencies = file.dependencies.filter((dependency) => dependency.status !== "resolved").sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    const blockedDependencies = openDependencies.filter((dependency) => dependency.status === "blocked");
+    const overdueDependencies = openDependencies.filter((dependency) => isDependencyOverdue(dependency));
     const recentDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate)).slice(0, 5);
     const calculatedProjectHealth = calculateProjectHealth(file, today);
     const calculatedWorkstreamHealth = file.workstreams.map((workstream) => ({ workstream, health: calculateWorkstreamHealth(file, workstream, today) }));
@@ -593,6 +603,9 @@ export function ProjectFileWorkspace() {
         <div className="grid gap-6 xl:grid-cols-2">
           <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Upcoming milestones</h3>{upcomingMilestones.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No upcoming incomplete milestones are scheduled.</p> : <div className="mt-4 space-y-3">{upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => <div className="rounded-2xl bg-slate-50 p-4" key={milestone.id}><p className="font-semibold">{milestone.name}</p><p className="mt-1 text-sm text-slate-600">{workstream?.name ?? "Unassigned workstream"} · {milestone.plannedDate} · {formatDateDistance(daysUntilPlanned)}</p></div>)}</div>}</section>
           <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Calculated workstream health</h3>{file.workstreams.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No workstreams yet. Add workstreams to see health distribution.</p> : <><dl className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">{projectStatuses.map((status) => <div className={`rounded-2xl border p-3 ${statusTone(status)}`} key={status}><dt className="text-xs font-bold uppercase">{statusLabel(status)}</dt><dd className="mt-2 text-2xl font-bold">{statusCounts[status]}</dd></div>)}</dl><div className="mt-4 space-y-3">{calculatedWorkstreamHealth.map(({ workstream, health }) => <div className="rounded-2xl bg-slate-50 p-3 text-sm" key={workstream.id}><p className="flex justify-between gap-3"><span className="font-semibold">{workstream.name}</span><span className={`rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${statusTone(health.status)}`}>{statusLabel(health.status)}</span></p><p className="mt-1 text-xs font-semibold text-slate-600">Mode: {statusLabel(health.mode)}{health.mode === "manual" ? ` override (auto would be ${statusLabel(health.calculatedStatus)})` : ""}</p><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-600">{health.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul></div>)}</div></>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Open dependencies</h3>{openDependencies.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No open dependencies.</p> : <div className="mt-4 space-y-3">{openDependencies.slice(0, 8).map((dependency) => <div className="rounded-2xl bg-slate-50 p-4" key={dependency.id}><p className="font-semibold">{dependency.title}</p><p className="mt-1 text-sm text-slate-600">Owner: {dependency.owner || "Unassigned"} · Due {dependency.dueDate} ({formatDateDistance(daysBetween(today, dependency.dueDate))}) · {statusLabel(dependency.status)}</p></div>)}</div>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Blocked dependencies</h3>{blockedDependencies.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No blocked dependencies.</p> : <div className="mt-4 space-y-3">{blockedDependencies.map((dependency) => <div className="rounded-2xl bg-red-50 p-4" key={dependency.id}><p className="font-semibold">{dependency.title}</p><p className="mt-1 text-sm text-red-800">Owner: {dependency.owner || "Unassigned"} · Due {dependency.dueDate}</p></div>)}</div>}</section>
+          <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Overdue dependencies</h3>{overdueDependencies.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No overdue dependencies.</p> : <div className="mt-4 space-y-3">{overdueDependencies.map((dependency) => <div className="rounded-2xl bg-red-50 p-4" key={dependency.id}><p className="font-semibold">{dependency.title}</p><p className="mt-1 text-sm text-red-800">{formatDateDistance(daysBetween(today, dependency.dueDate))} · {statusLabel(dependency.status)}</p></div>)}</div>}</section>
           <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Open actions</h3>{openActions.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No open or overdue actions.</p> : <div className="mt-4 space-y-3">{openActions.map(({ action, daysUntilDue }) => <div className="rounded-2xl bg-slate-50 p-4" key={action.id}><p className="font-semibold">{action.description}</p><p className="mt-1 text-sm text-slate-600">Owner: {action.owner || "Unassigned"} · {action.dueDate ? formatDateDistance(daysUntilDue) : "No due date"} · {statusLabel(action.status)}</p><p className="mt-1 text-sm font-semibold text-slate-700">{formatLinkedContext(file, "action", action.id)}</p></div>)}</div>}</section>
           <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Recent decisions</h3>{recentDecisions.length === 0 ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No decisions captured yet.</p> : <div className="mt-4 space-y-3">{recentDecisions.map((decision) => <div className="rounded-2xl bg-slate-50 p-4" key={decision.id}><p className="font-semibold">{decision.title}</p><p className="mt-1 text-sm text-slate-600">{decision.decisionDate} · {decision.decisionMaker || "Decision maker not set"}</p><p className="mt-1 text-sm font-semibold text-slate-700">{formatLinkedContext(file, "decision", decision.id)}</p><p className="mt-2 text-sm text-slate-700">{decision.decisionText}</p></div>)}</div>}</section>
         </div>
@@ -786,6 +799,88 @@ export function ProjectFileWorkspace() {
   }
 
 
+  function getDependencyContext(file: PmgovFile, dependency: Dependency) {
+    return {
+      sourceWorkstream: file.workstreams.find((item) => item.id === dependency.sourceWorkstreamId),
+      sourceMilestone: dependency.sourceMilestoneId ? file.milestones.find((item) => item.id === dependency.sourceMilestoneId) : undefined,
+      targetWorkstream: file.workstreams.find((item) => item.id === dependency.targetWorkstreamId),
+      targetMilestone: dependency.targetMilestoneId ? file.milestones.find((item) => item.id === dependency.targetMilestoneId) : undefined,
+    };
+  }
+
+  function isDependencyOverdue(dependency: Dependency) {
+    const daysUntilDue = daysBetween(todayIsoDate(), dependency.dueDate);
+    return dependency.status !== "resolved" && daysUntilDue !== null && daysUntilDue < 0;
+  }
+
+  function addDependency() {
+    const firstWorkstreamId = projectFile?.workstreams[0]?.id ?? "";
+    const dependency: Dependency = {
+      id: crypto.randomUUID(),
+      title: "New dependency",
+      description: "",
+      sourceWorkstreamId: firstWorkstreamId,
+      sourceMilestoneId: undefined,
+      targetWorkstreamId: firstWorkstreamId,
+      targetMilestoneId: undefined,
+      owner: "",
+      dueDate: todayIsoDate(),
+      status: "open",
+      commentary: "",
+    };
+
+    mutateProjectFile((current) => ({ ...current, dependencies: [...current.dependencies, dependency] }), "Dependency created.");
+  }
+
+  function updateDependency(id: string, patch: Partial<Dependency>) {
+    mutateProjectFile((current) => ({ ...current, dependencies: current.dependencies.map((dependency) => (dependency.id === id ? { ...dependency, ...patch } : dependency)) }), "Dependency updated.");
+  }
+
+  function deleteDependency(dependency: Dependency) {
+    if (!window.confirm(`Delete dependency "${dependency.title}"? This cannot be undone.`)) {
+      return;
+    }
+
+    mutateProjectFile((current) => ({ ...current, dependencies: current.dependencies.filter((item) => item.id !== dependency.id) }), "Dependency deleted.");
+  }
+
+  function renderDependencyMilestoneOptions(file: PmgovFile, workstreamId: string, selectedId?: string) {
+    const stageIds = new Set(file.stages.filter((stage) => stage.workstreamId === workstreamId).map((stage) => stage.id));
+    const milestones = file.milestones.filter((milestone) => stageIds.has(milestone.stageId));
+    const selectedMissing = selectedId && !milestones.some((milestone) => milestone.id === selectedId);
+
+    return <>{selectedMissing ? <option value={selectedId}>Deleted or unavailable item</option> : null}{milestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.name}</option>)}</>;
+  }
+
+  function renderDependenciesWorkspace(file: PmgovFile) {
+    const normalizedSearch = dependencySearchQuery.trim().toLowerCase();
+    const filteredDependencies = [...file.dependencies]
+      .filter((dependency) => dependencyStatusFilter === "all" || dependency.status === dependencyStatusFilter)
+      .filter((dependency) => dependencyWorkstreamFilter === "all" || dependency.sourceWorkstreamId === dependencyWorkstreamFilter || dependency.targetWorkstreamId === dependencyWorkstreamFilter)
+      .filter((dependency) => !normalizedSearch || dependency.title.toLowerCase().includes(normalizedSearch))
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.title.localeCompare(b.title));
+
+    return (
+      <section className="space-y-6" id="dependencies">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Dependencies</p>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><h3 className="text-2xl font-bold">Delivery dependencies</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Track delivery hand-offs and blockers between source and target workstreams and optional milestones.</p></div><button className="rounded-2xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-800" onClick={addDependency} type="button">Create Dependency</button></div>
+        </div>
+        <div className="grid gap-4 rounded-3xl border border-slate-200 bg-white p-5 md:grid-cols-3">
+          <label className="text-sm font-medium text-slate-700">Search title<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setDependencySearchQuery(event.target.value)} placeholder="Search dependencies" value={dependencySearchQuery} /></label>
+          <label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setDependencyStatusFilter(event.target.value as DependencyStatus | "all")} value={dependencyStatusFilter}><option value="all">All statuses</option>{dependencyStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label>
+          <label className="text-sm font-medium text-slate-700">Workstream<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setDependencyWorkstreamFilter(event.target.value)} value={dependencyWorkstreamFilter}><option value="all">All workstreams</option>{file.workstreams.map((workstream) => <option key={workstream.id} value={workstream.id}>{workstream.name}</option>)}</select></label>
+        </div>
+        {file.dependencies.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No dependencies captured yet.</p> : filteredDependencies.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No dependencies match the current filters.</p> : <div className="grid gap-5">{filteredDependencies.map((dependency) => {
+          const context = getDependencyContext(file, dependency);
+          const overdue = isDependencyOverdue(dependency);
+          return <article className={`rounded-3xl border p-5 ${dependency.status === "blocked" || overdue ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"}`} key={dependency.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { title: event.target.value })} value={dependency.title} /></label><label className="text-sm font-medium text-slate-700">Owner<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { owner: event.target.value })} value={dependency.owner} /></label><label className="text-sm font-medium text-slate-700">Due Date<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { dueDate: event.target.value })} type="date" value={dependency.dueDate} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { status: event.target.value as DependencyStatus })} value={dependency.status}>{dependencyStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label><div className="rounded-2xl bg-white p-3 text-sm"><span className="font-semibold text-slate-500">Due</span><span className={`mt-1 block font-bold ${overdue ? "text-red-800" : "text-slate-900"}`}>{formatDateDistance(daysBetween(todayIsoDate(), dependency.dueDate))}</span></div><button className="self-end rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteDependency(dependency)} type="button">Delete Dependency</button><label className="text-sm font-medium text-slate-700">Source Workstream<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { sourceWorkstreamId: event.target.value, sourceMilestoneId: undefined })} value={dependency.sourceWorkstreamId}><option value="">Select source workstream</option>{dependency.sourceWorkstreamId && !context.sourceWorkstream ? <option value={dependency.sourceWorkstreamId}>Deleted or unavailable item</option> : null}{file.workstreams.map((workstream) => <option key={workstream.id} value={workstream.id}>{workstream.name}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Source Milestone<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { sourceMilestoneId: optionalDate(event.target.value) })} value={dependency.sourceMilestoneId ?? ""}><option value="">No source milestone</option>{renderDependencyMilestoneOptions(file, dependency.sourceWorkstreamId, dependency.sourceMilestoneId)}</select></label><label className="text-sm font-medium text-slate-700">Target Workstream<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { targetWorkstreamId: event.target.value, targetMilestoneId: undefined })} value={dependency.targetWorkstreamId}><option value="">Select target workstream</option>{dependency.targetWorkstreamId && !context.targetWorkstream ? <option value={dependency.targetWorkstreamId}>Deleted or unavailable item</option> : null}{file.workstreams.map((workstream) => <option key={workstream.id} value={workstream.id}>{workstream.name}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Target Milestone<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { targetMilestoneId: optionalDate(event.target.value) })} value={dependency.targetMilestoneId ?? ""}><option value="">No target milestone</option>{renderDependencyMilestoneOptions(file, dependency.targetWorkstreamId, dependency.targetMilestoneId)}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Description<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { description: event.target.value })} value={dependency.description} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDependency(dependency.id, { commentary: event.target.value })} value={dependency.commentary ?? ""} /></label></div></article>;
+        })}</div>}
+      </section>
+    );
+  }
+
+
   function isActionOverdue(action: ActionItem) {
     return action.status !== "completed" && action.status !== "cancelled" && daysBetween(todayIsoDate(), action.dueDate) !== null && (daysBetween(todayIsoDate(), action.dueDate) ?? 0) < 0;
   }
@@ -901,11 +996,13 @@ export function ProjectFileWorkspace() {
       .filter((action) => action.status !== "completed" && action.status !== "cancelled")
       .map((action) => ({ action, daysUntilDue: daysBetween(today, action.dueDate) }))
       .sort((a, b) => (a.daysUntilDue ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilDue ?? Number.MAX_SAFE_INTEGER));
+    const dependencies = [...file.dependencies].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    const blockedDependencies = dependencies.filter((dependency) => dependency.status === "blocked");
     const recentDecisions = [...file.decisions].sort((a, b) => b.decisionDate.localeCompare(a.decisionDate)).slice(0, 8);
     const workstreamHealth = file.workstreams.map((workstream) => ({ workstream, health: calculateWorkstreamHealth(file, workstream, today) }));
     const projectHealth = calculateProjectHealth(file, today);
 
-    return { generatedAt, attentionMilestones, upcomingMilestones, openActions, recentDecisions, workstreamHealth, projectHealth };
+    return { generatedAt, attentionMilestones, upcomingMilestones, openActions, dependencies, blockedDependencies, recentDecisions, workstreamHealth, projectHealth };
   }
 
   function formatReportGeneratedAt(value: string) {
@@ -918,10 +1015,12 @@ export function ProjectFileWorkspace() {
     const attentionItems = data.attentionMilestones.map(({ milestone, workstream, stage, reasons }) => `- ${milestone.name} (${workstream?.name ?? "Unassigned workstream"} / ${stage?.name ?? "Unassigned stage"}): ${reasons?.join("; ") ?? "Requires attention"}.`);
     const upcomingItems = data.upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => `- ${milestone.plannedDate} (${formatDateDistance(daysUntilPlanned)}): ${milestone.name} — ${workstream?.name ?? "Unassigned workstream"}.`);
     const actionItems = data.openActions.map(({ action, daysUntilDue }) => `- ${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysUntilDue)})` : "No due date"}; Status: ${statusLabel(action.status)}; Context: ${formatLinkedContext(file, "action", action.id)}.`);
+    const dependencyItems = data.dependencies.map((dependency) => `- ${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate} (${formatDateDistance(daysBetween(todayIsoDate(), dependency.dueDate))}); Status: ${statusLabel(dependency.status)}.`);
+    const blockedDependencyItems = data.blockedDependencies.map((dependency) => `- ${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate}; ${dependency.commentary || "No commentary"}.`);
     const decisionItems = data.recentDecisions.map((decision) => `- ${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}; Context: ${formatLinkedContext(file, "decision", decision.id)}. ${decision.decisionText}`);
 
     return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${formatReportGeneratedAt(data.generatedAt)}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject health: ${statusLabel(data.projectHealth.status)} (${statusLabel(data.projectHealth.mode)}${data.projectHealth.mode === "manual" ? ` override; auto would be ${statusLabel(data.projectHealth.calculatedStatus)}` : ""})
-Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Dependency Summary\n${lineItems(dependencyItems, "No dependencies captured.")}\n\n## Blocked Dependencies\n${lineItems(blockedDependencyItems, "No blocked dependencies captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
   }
 
   async function copyReportMarkdown(file: PmgovFile, data: ExecutiveReportData) {
@@ -967,6 +1066,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
             <section><h3 className="text-xl font-bold">Milestone Outlook</h3>{reportData.upcomingMilestones.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No upcoming milestones captured.</p> : <div className="mt-3 space-y-3">{reportData.upcomingMilestones.map(({ milestone, workstream, daysUntilPlanned }) => <div className="rounded-2xl bg-slate-50 p-4" key={milestone.id}><p className="font-semibold">{milestone.name}</p><p className="mt-1 text-sm text-slate-600">{milestone.plannedDate} · {formatDateDistance(daysUntilPlanned)} · {workstream?.name ?? "Unassigned workstream"}</p></div>)}</div>}</section>
             <section><h3 className="text-xl font-bold">Workstream Health</h3><p className="mt-2 text-sm text-slate-700">{workstreamHealth}</p>{reportData.workstreamHealth.length > 0 ? <div className="mt-3 space-y-2">{reportData.workstreamHealth.map(({ workstream, health }) => <div className="rounded-2xl bg-slate-50 p-3 text-sm" key={workstream.id}><p><strong>{workstream.name}</strong>: {statusLabel(health.status)} ({statusLabel(health.mode)}{health.mode === "manual" ? ` override; auto would be ${statusLabel(health.calculatedStatus)}` : ""})</p><ul className="mt-2 list-disc space-y-1 pl-5 text-slate-700">{health.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>{workstream.commentary ? <p className="mt-2 text-slate-700">{workstream.commentary}</p> : null}</div>)}</div> : null}</section>
             <section><h3 className="text-xl font-bold">Open Actions</h3>{reportData.openActions.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No open actions captured.</p> : <div className="mt-3 space-y-3">{reportData.openActions.map(({ action, daysUntilDue }) => <div className="rounded-2xl bg-slate-50 p-4" key={action.id}><p className="font-semibold">{action.description}</p><p className="mt-1 text-sm text-slate-600">Owner: {action.owner || "Unassigned"} · {action.dueDate ? formatDateDistance(daysUntilDue) : "No due date"} · {statusLabel(action.status)}</p><p className="mt-1 text-sm font-semibold text-slate-700">{formatLinkedContext(file, "action", action.id)}</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Dependency Summary</h3>{reportData.dependencies.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No dependencies captured.</p> : <div className="mt-3 space-y-3">{reportData.dependencies.map((dependency) => <div className="rounded-2xl bg-slate-50 p-4" key={dependency.id}><p className="font-semibold">{dependency.title}</p><p className="mt-1 text-sm text-slate-600">Owner: {dependency.owner || "Unassigned"} · Due {dependency.dueDate} · {statusLabel(dependency.status)}</p></div>)}</div>}</section>
+            <section><h3 className="text-xl font-bold">Blocked Dependencies</h3>{reportData.blockedDependencies.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No blocked dependencies captured.</p> : <div className="mt-3 space-y-3">{reportData.blockedDependencies.map((dependency) => <div className="rounded-2xl bg-red-50 p-4" key={dependency.id}><p className="font-semibold">{dependency.title}</p><p className="mt-1 text-sm text-red-800">Owner: {dependency.owner || "Unassigned"} · Due {dependency.dueDate}</p><p className="mt-2 text-sm text-slate-700">{dependency.commentary || "No commentary"}</p></div>)}</div>}</section>
             <section><h3 className="text-xl font-bold">Recent Decisions</h3>{reportData.recentDecisions.length === 0 ? <p className="mt-2 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No recent decisions captured.</p> : <div className="mt-3 space-y-3">{reportData.recentDecisions.map((decision) => <div className="rounded-2xl bg-slate-50 p-4" key={decision.id}><p className="font-semibold">{decision.title}</p><p className="mt-1 text-sm text-slate-600">{decision.decisionDate} · {decision.decisionMaker || "Decision maker not set"}</p><p className="mt-1 text-sm font-semibold text-slate-700">{formatLinkedContext(file, "decision", decision.id)}</p><p className="mt-2 text-sm text-slate-700">{decision.decisionText}</p></div>)}</div>}</section>
             <section><h3 className="text-xl font-bold">Executive Summary</h3><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{file.project.executiveSummary || "No executive summary has been entered for this project."}</p></section>
           </div>
@@ -982,6 +1083,7 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
       Timeline: "A roadmap-style timeline grouped by workstream and stage will appear here.",
       Notebook: "Meeting, workshop, and general governance notes will be captured here.",
       Governance: "Actions and decisions tabs will appear here when governance extraction is implemented.",
+      Dependencies: "Delivery dependency tracking and blocker summaries will appear here.",
       Reports: "Executive status report generation, copy Markdown, and printable output will appear here.",
       Settings: "Project-level settings and file information will appear here.",
     };
@@ -1092,6 +1194,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
                 renderNotebookWorkspace(projectFile)
               ) : activeView === "Governance" ? (
                 renderGovernanceWorkspace(projectFile)
+              ) : activeView === "Dependencies" ? (
+                renderDependenciesWorkspace(projectFile)
               ) : activeView === "Reports" ? (
                 renderExecutiveReportWorkspace(projectFile)
               ) : (
