@@ -4,6 +4,11 @@ export type StageStatus = "not_started" | "in_progress" | "complete" | "blocked"
 export type MilestoneStatus = RagStatus | "complete";
 export type ActionStatus = "open" | "in_progress" | "completed" | "cancelled";
 export type DependencyStatus = "open" | "in_progress" | "resolved" | "blocked";
+export type RaidLevel = "low" | "medium" | "high";
+export type RiskStatus = "open" | "monitoring" | "mitigated" | "closed";
+export type AssumptionStatus = "active" | "validated" | "invalidated";
+export type IssueSeverity = "low" | "medium" | "high" | "critical";
+export type IssueStatus = "open" | "investigating" | "resolved" | "closed";
 export type NoteType = "meeting" | "workshop" | "general";
 export type ImpactLevel = "low" | "medium" | "high" | "critical" | "not_set";
 export type EntityType = "note" | "decision" | "action" | "milestone" | "workstream" | "stage";
@@ -21,6 +26,9 @@ export interface PmgovFile {
   decisions: Decision[];
   actions: ActionItem[];
   dependencies: Dependency[];
+  risks: Risk[];
+  assumptions: Assumption[];
+  issues: Issue[];
   links: EntityLink[];
   reports: Report[];
 }
@@ -118,6 +126,41 @@ export interface Dependency {
   dueDate: string;
   status: DependencyStatus;
   commentary?: string;
+}
+
+export interface Risk {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  probability: RaidLevel;
+  impact: RaidLevel;
+  mitigation: string;
+  status: RiskStatus;
+  relatedWorkstreamId?: string;
+  relatedMilestoneId?: string;
+}
+
+export interface Assumption {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  validationDate: string;
+  status: AssumptionStatus;
+  relatedWorkstreamId?: string;
+}
+
+export interface Issue {
+  id: string;
+  title: string;
+  description: string;
+  owner: string;
+  severity: IssueSeverity;
+  status: IssueStatus;
+  targetResolutionDate: string;
+  relatedWorkstreamId?: string;
+  relatedMilestoneId?: string;
 }
 
 export interface EntityLink {
