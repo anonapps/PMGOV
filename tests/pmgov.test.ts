@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildExecutiveReportMarkdown,
+  calculateProjectHealth,
+  calculateWorkstreamHealth,
   createEmptyProjectFile,
   formatMilestoneVariance,
   getMilestoneAttentionReasons,
@@ -60,4 +62,23 @@ test("executive report Markdown includes attention, actions, decisions, and empt
   assert.match(markdown, /Pilot \(Delivery \/ Build\): amber status; forecast is later than planned/);
   assert.match(markdown, /Confirm launch owner/);
   assert.match(markdown, /Use local files/);
+});
+
+
+test("automated health calculates project and workstream status with manual override support", () => {
+  const file = fixture();
+  const workstreamHealth = calculateWorkstreamHealth(file, file.workstreams[0], "2026-06-20");
+  assert.equal(workstreamHealth.status, "amber");
+  assert.match(workstreamHealth.reasons.join("; "), /Pilot/);
+
+  const projectHealth = calculateProjectHealth(file, "2026-06-20");
+  assert.equal(projectHealth.status, "amber");
+  assert.match(projectHealth.reasons.join("; "), /open action|Action/);
+
+  file.project.healthMode = "manual";
+  file.project.status = "red";
+  const overriddenProjectHealth = calculateProjectHealth(file, "2026-06-20");
+  assert.equal(overriddenProjectHealth.status, "red");
+  assert.equal(overriddenProjectHealth.calculatedStatus, "amber");
+  assert.equal(overriddenProjectHealth.mode, "manual");
 });

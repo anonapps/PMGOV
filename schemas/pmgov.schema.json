@@ -82,6 +82,12 @@
             "not_set"
           ]
         },
+        "healthMode": {
+          "enum": [
+            "auto",
+            "manual"
+          ]
+        },
         "executiveSummary": {
           "type": "string"
         }
@@ -162,6 +168,12 @@
             "red",
             "not_set",
             "complete"
+          ]
+        },
+        "healthMode": {
+          "enum": [
+            "auto",
+            "manual"
           ]
         },
         "commentary": {
