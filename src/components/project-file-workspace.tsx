@@ -4,16 +4,19 @@ import { ChangeEvent, useMemo, useRef, useState } from "react";
 import type { ActionItem, ActionStatus, Decision, Assumption, AssumptionStatus, Dependency, DependencyStatus, EntityLink, EntityType, HealthMode, ImpactLevel, Issue, IssueSeverity, IssueStatus, Milestone, MilestoneStatus, Note, NoteType, PmgovFile, RagStatus, RaidLevel, Risk, RiskStatus, Stage, StageStatus, Workstream, WorkstreamStatus } from "@/types/pmgov";
 import {
   buildPmgovFilename,
+  buildPortfolioExecutiveReportMarkdown,
   calculateProjectHealth,
   calculateWorkstreamHealth,
   createEmptyProjectFile,
+  createEmptyPortfolioProject,
+  projectWorkspaceToLegacyFile,
   parsePmgovJson,
   preparePmgovForSave,
   serializePmgovFile,
   validatePmgovFile,
 } from "@/lib/pmgov";
 
-const navigationItems = ["Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Dependencies", "RAID", "Reports", "Settings"] as const;
+const navigationItems = ["Portfolio", "Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Dependencies", "RAID", "Reports", "Settings"] as const;
 const projectStatuses: RagStatus[] = ["not_set", "green", "amber", "red"];
 const healthModes: HealthMode[] = ["auto", "manual"];
 const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "red", "complete"];
@@ -328,7 +331,7 @@ export function ProjectFileWorkspace() {
     setProjectFile(nextFile);
     setLastSavedSnapshot(null);
     setOpenedFileName(null);
-    setActiveView("Dashboard");
+    setActiveView("Portfolio");
     setReportGeneratedAt(new Date().toISOString());
     setMessage({ tone: "success", text: "New in-memory project created. Use Save As to write a .pmgov file." });
   }
@@ -361,7 +364,7 @@ export function ProjectFileWorkspace() {
     setProjectFile(result.data);
     setLastSavedSnapshot(snapshot);
     setOpenedFileName(selectedFile.name);
-    setActiveView("Dashboard");
+    setActiveView("Portfolio");
     setReportGeneratedAt(new Date().toISOString());
     setMessage({ tone: "success", text: `${selectedFile.name} opened and validated locally.` });
   }
@@ -380,7 +383,7 @@ export function ProjectFileWorkspace() {
       return;
     }
 
-    const requestedName = saveAs ? buildPmgovFilename(validationResult.data.project.name) : openedFileName ?? undefined;
+    const requestedName = saveAs ? buildPmgovFilename(validationResult.data.portfolio.name) : openedFileName ?? undefined;
     const { filename, serialized } = downloadProjectFile(validationResult.data, requestedName);
 
     setProjectFile(validationResult.data);
@@ -389,6 +392,29 @@ export function ProjectFileWorkspace() {
     setMessage({ tone: "success", text: `${filename} saved from browser memory. No project data was sent to a server.` });
   }
 
+  function syncActiveRoot(current: PmgovFile): PmgovFile {
+    const activeProject = { ...current.project, workstreams: current.workstreams, stages: current.stages, milestones: current.milestones, notes: current.notes, decisions: current.decisions, actions: current.actions, dependencies: current.dependencies, risks: current.risks, assumptions: current.assumptions, issues: current.issues, links: current.links, reports: current.reports };
+    return { ...current, projects: current.projects.map((project) => (project.id === current.activeProjectId ? activeProject : project)) };
+  }
+
+  function loadProjectIntoRoot(current: PmgovFile, projectId: string): PmgovFile {
+    const synced = syncActiveRoot(current);
+    const project = synced.projects.find((item) => item.id === projectId) ?? synced.projects[0];
+    return { ...synced, ...projectWorkspaceToLegacyFile(synced, project), activeProjectId: project.id };
+  }
+
+  function updatePortfolio(patch: Partial<PmgovFile["portfolio"]>) {
+    mutateProjectFile((current) => ({ ...current, portfolio: { ...current.portfolio, ...patch } }), "Portfolio updated.");
+  }
+
+  function switchActiveProject(projectId: string) {
+    mutateProjectFile((current) => loadProjectIntoRoot(current, projectId), "Active project switched.");
+  }
+
+  function addPortfolioProject() {
+    const project = createEmptyPortfolioProject();
+    mutateProjectFile((current) => ({ ...loadProjectIntoRoot(syncActiveRoot(current), current.activeProjectId), projects: [...syncActiveRoot(current).projects, project] }), "Project added to portfolio.");
+  }
 
   function mutateProjectFile(updater: (current: PmgovFile) => PmgovFile, successText: string) {
     setProjectFile((current) => {
@@ -540,6 +566,29 @@ export function ProjectFileWorkspace() {
         </div>
       </section>
     );
+  }
+
+
+  function renderPortfolioWorkspace(file: PmgovFile) {
+    const today = todayIsoDate();
+    const synced = syncActiveRoot(file);
+    const projectRows = synced.projects.map((project) => {
+      const activeLike = projectWorkspaceToLegacyFile(synced, project);
+      const health = calculateProjectHealth(activeLike, today);
+      return { project, activeLike, health };
+    });
+    const openRisks = synced.projects.flatMap((project) => project.risks.filter((risk) => risk.status === "open" || risk.status === "monitoring").map((risk) => ({ project, risk })));
+    const criticalIssues = synced.projects.flatMap((project) => project.issues.filter((issue) => issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").map((issue) => ({ project, issue })));
+    const openDependencies = synced.projects.flatMap((project) => project.dependencies.filter((dependency) => dependency.status !== "resolved").map((dependency) => ({ project, dependency })));
+    const upcomingMilestones = synced.projects.flatMap((project) => project.milestones.filter((milestone) => milestone.status !== "complete").map((milestone) => ({ project, milestone, daysUntil: daysBetween(today, milestone.plannedDate) }))).filter((item) => item.daysUntil !== null && item.daysUntil >= 0 && item.daysUntil <= 30).sort((a, b) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0)).slice(0, 8);
+    const counts = { total: projectRows.length, green: projectRows.filter((row) => row.health.status === "green").length, amber: projectRows.filter((row) => row.health.status === "amber").length, red: projectRows.filter((row) => row.health.status === "red").length };
+    const portfolioHealth: RagStatus = counts.red > 0 || criticalIssues.length > 0 || openDependencies.some(({ dependency }) => dependency.status === "blocked") ? "red" : counts.amber > 0 || openRisks.some(({ risk }) => risk.probability === "high" || risk.impact === "high") ? "amber" : "green";
+
+    return <div className="grid gap-6" id="portfolio">
+      <section className="rounded-3xl border border-slate-200 bg-white p-6"><div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Portfolio Overview</p><h3 className="mt-2 text-2xl font-bold">{file.portfolio.name}</h3><p className="mt-2 text-sm text-slate-600">Manage multiple local projects inside one .pmgov portfolio file.</p></div><button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white" onClick={addPortfolioProject} type="button">Add project</button></div><div className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Portfolio Name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ name: event.target.value })} value={file.portfolio.name} /></label><label className="text-sm font-medium text-slate-700">Sponsor<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ sponsor: event.target.value })} value={file.portfolio.sponsor ?? ""} /></label><label className="text-sm font-medium text-slate-700">Portfolio Manager<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ portfolioManager: event.target.value })} value={file.portfolio.portfolioManager ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ description: event.target.value })} value={file.portfolio.description ?? ""} /></label></div></section>
+      <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Portfolio Dashboard</h3><dl className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">{[["Total Projects", counts.total], ["Green Projects", counts.green], ["Amber Projects", counts.amber], ["Red Projects", counts.red], ["Open Risks", openRisks.length], ["Critical Issues", criticalIssues.length], ["Open Dependencies", openDependencies.length], ["Upcoming Milestones", upcomingMilestones.length]].map(([label, value]) => <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" key={label as string}><dt className="text-xs font-bold uppercase text-slate-500">{label}</dt><dd className="mt-2 text-2xl font-bold">{value}</dd></div>)}</dl><p className={`mt-4 inline-flex rounded-full border px-4 py-2 text-sm font-bold uppercase ${statusTone(portfolioHealth)}`}>Portfolio health: {statusLabel(portfolioHealth)}</p></section>
+      <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Projects List</h3><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[56rem] text-left text-sm"><thead><tr className="border-b text-xs uppercase text-slate-500"><th className="py-2">Project ID</th><th>Name</th><th>Sponsor</th><th>PM</th><th>Status</th><th>Start</th><th>Target</th></tr></thead><tbody>{projectRows.map(({ project, health }) => <tr className="border-b border-slate-100" key={project.id}><td className="py-3 font-mono text-xs">{project.id}</td><td><button className="font-semibold text-blue-700" onClick={() => switchActiveProject(project.id)} type="button">{project.name}</button><p className="text-xs text-slate-500">{project.description}</p></td><td>{project.sponsor || "Not set"}</td><td>{project.projectManager || "Not set"}</td><td><span className={`rounded-full border px-2 py-1 text-xs uppercase ${statusTone(health.status)}`}>{statusLabel(health.status)}</span></td><td>{project.startDate || "—"}</td><td>{project.targetDate || "—"}</td></tr>)}</tbody></table></div></section>
+    </div>;
   }
 
   function renderDashboard(file: PmgovFile) {
@@ -1074,6 +1123,11 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
     setMessage({ tone: "success", text: "Executive status report copied as Markdown." });
   }
 
+  async function copyPortfolioReportMarkdown(file: PmgovFile) {
+    await navigator.clipboard.writeText(buildPortfolioExecutiveReportMarkdown(syncActiveRoot(file), formatReportGeneratedAt(reportGeneratedAt), todayIsoDate()));
+    setMessage({ tone: "success", text: "Portfolio executive report copied as Markdown." });
+  }
+
   function regenerateReport() {
     setReportGeneratedAt(new Date().toISOString());
     setMessage({ tone: "success", text: "Executive status report regenerated from current in-memory project data." });
@@ -1096,7 +1150,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
             </div>
             <div className="flex flex-wrap gap-3">
               <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={regenerateReport} type="button">Regenerate</button>
-              <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={() => copyReportMarkdown(file, reportData)} type="button">Copy Markdown</button>
+              <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={() => copyReportMarkdown(file, reportData)} type="button">Copy Project Markdown</button>
+              <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" onClick={() => copyPortfolioReportMarkdown(file)} type="button">Copy Portfolio Executive Report</button>
               <button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-800" onClick={() => window.print()} type="button">Print</button>
             </div>
           </div>
@@ -1125,6 +1180,7 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
 
   function renderPlaceholder(view: NavigationItem) {
     const descriptions: Record<NavigationItem, string> = {
+      Portfolio: "Portfolio overview, projects list, and portfolio dashboard are available here.",
       Dashboard: "Milestones requiring attention, upcoming milestones, workstream health, open actions, recent decisions, and the executive summary will appear here.",
       Workstreams: "Manage workstream lists, stages, and milestones grouped by stage here in a later task.",
       Timeline: "A roadmap-style timeline grouped by workstream and stage will appear here.",
@@ -1226,13 +1282,23 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
                 {message.text}
               </p>
 
+              <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-5">
+                <label className="text-sm font-bold uppercase tracking-[0.2em] text-slate-500">Active project</label>
+                <select className="mt-3 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => switchActiveProject(event.target.value)} value={projectFile.activeProjectId}>
+                  {projectFile.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+                <p className="mt-2 text-sm text-slate-600">All project workspaces below use the selected project inside this local portfolio file.</p>
+              </div>
+
               <div className="mb-6 grid gap-4 md:grid-cols-3">
                 <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">File</p><p className="mt-3 text-lg font-bold">{openedFileName ?? "No file saved"}</p></div>
                 <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Validation</p><p className={`mt-3 text-lg font-bold ${validation?.success ? "text-green-700" : "text-red-700"}`}>{validation?.success ? "Schema valid" : "Schema invalid"}</p></div>
                 <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Records</p><p className="mt-3 text-lg font-bold">{countRecords(projectFile).reduce((total, [, count]) => total + count, 0)} total records</p><p className="mt-1 text-xs text-slate-500">{countRecords(projectFile).map(([label, count]) => `${label}: ${count}`).join(" · ")}</p></div>
               </div>
 
-              {activeView === "Dashboard" ? (
+              {activeView === "Portfolio" ? (
+                renderPortfolioWorkspace(projectFile)
+              ) : activeView === "Dashboard" ? (
                 renderDashboard(projectFile)
               ) : activeView === "Workstreams" ? (
                 renderWorkstreamsWorkspace(projectFile)

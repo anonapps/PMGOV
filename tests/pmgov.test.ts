@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildExecutiveReportMarkdown,
+  buildPortfolioExecutiveReportMarkdown,
+  calculatePortfolioHealth,
+  getActiveProjectWorkspace,
   calculateProjectHealth,
   calculateWorkstreamHealth,
   createEmptyProjectFile,
@@ -111,4 +114,32 @@ test("existing files without dependencies or RAID records remain valid and defau
     assert.deepEqual(parsed.data.assumptions, []);
     assert.deepEqual(parsed.data.issues, []);
   }
+});
+
+
+test("portfolio files persist multiple project workspaces and executive reports", () => {
+  const file = fixture();
+  const activeProject = getActiveProjectWorkspace(file);
+  assert.equal(activeProject.name, "QA Project");
+  const second = structuredClone(activeProject);
+  second.id = "project-2";
+  second.name = "Second Project";
+  second.status = "green";
+  second.workstreams = [];
+  second.stages = [];
+  second.milestones = [];
+  second.actions = [];
+  second.dependencies = [];
+  second.risks = [];
+  second.assumptions = [];
+  second.issues = [];
+  file.projects.push(second);
+  const health = calculatePortfolioHealth(file, "2026-06-20");
+  assert.equal(health.status, "red");
+  const report = buildPortfolioExecutiveReportMarkdown(file, "2026-06-20 10:00", "2026-06-20");
+  assert.match(report, /^# Portfolio Executive Report — Untitled Portfolio/);
+  assert.match(report, /Project Summary/);
+  assert.match(report, /Vendor delay/);
+  assert.match(report, /Production outage/);
+  assert.match(report, /API contract/);
 });

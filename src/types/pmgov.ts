@@ -12,13 +12,41 @@ export type IssueStatus = "open" | "investigating" | "resolved" | "closed";
 export type NoteType = "meeting" | "workshop" | "general";
 export type ImpactLevel = "low" | "medium" | "high" | "critical" | "not_set";
 export type EntityType = "note" | "decision" | "action" | "milestone" | "workstream" | "stage";
-export type ReportType = "status" | "steering_committee" | "executive";
+export type ReportType = "status" | "steering_committee" | "executive" | "portfolio_executive";
 export type HealthMode = "auto" | "manual";
 
-export interface PmgovFile {
+export interface PmgovFile extends LegacyPmgovFile {
+  portfolio: Portfolio;
+  activeProjectId: string;
+  projects: PortfolioProject[];
+}
+
+export interface LegacyPmgovFile {
   schemaVersion: "1.0.0";
   fileMetadata: FileMetadata;
   project: Project;
+  workstreams: Workstream[];
+  stages: Stage[];
+  milestones: Milestone[];
+  notes: Note[];
+  decisions: Decision[];
+  actions: ActionItem[];
+  dependencies: Dependency[];
+  risks: Risk[];
+  assumptions: Assumption[];
+  issues: Issue[];
+  links: EntityLink[];
+  reports: Report[];
+}
+
+export interface Portfolio {
+  name: string;
+  description?: string;
+  sponsor?: string;
+  portfolioManager?: string;
+}
+
+export interface PortfolioProject extends Project {
   workstreams: Workstream[];
   stages: Stage[];
   milestones: Milestone[];

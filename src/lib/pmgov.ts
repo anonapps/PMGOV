@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActionItem, Dependency, PmgovFile, RagStatus, Workstream } from "@/types/pmgov";
+import type { ActionItem, Dependency, LegacyPmgovFile, PmgovFile, PortfolioProject, RagStatus, Workstream } from "@/types/pmgov";
 
 export const APP_VERSION = "0.1.0";
 export const CURRENT_SCHEMA_VERSION = "1.0.0";
@@ -23,226 +23,129 @@ const issueStatusSchema = z.enum(["open", "investigating", "resolved", "closed"]
 const noteTypeSchema = z.enum(["meeting", "workshop", "general"]);
 const impactLevelSchema = z.enum(["low", "medium", "high", "critical", "not_set"]);
 const entityTypeSchema = z.enum(["note", "decision", "action", "milestone", "workstream", "stage"]);
-const reportTypeSchema = z.enum(["status", "steering_committee", "executive"]);
+const reportTypeSchema = z.enum(["status", "steering_committee", "executive", "portfolio_executive"]);
 const healthModeSchema = z.enum(["auto", "manual"]);
+
+const projectSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1, "Project name is required"),
+  description: z.string().optional(),
+  sponsor: z.string().optional(),
+  projectManager: z.string().min(1, "Project manager is required"),
+  startDate: isoDate.optional(),
+  targetDate: isoDate.optional(),
+  status: ragStatusSchema,
+  healthMode: healthModeSchema.optional(),
+  executiveSummary: z.string().optional(),
+});
+
+const workstreamSchema = z.object({ id: z.string().min(1), name: z.string().min(1), description: z.string().optional(), status: workstreamStatusSchema, healthMode: healthModeSchema.optional(), commentary: z.string().optional(), sortOrder: z.number() });
+const stageSchema = z.object({ id: z.string().min(1), workstreamId: z.string().min(1), name: z.string().min(1), status: stageStatusSchema.optional(), commentary: z.string().optional(), sortOrder: z.number() });
+const milestoneSchema = z.object({ id: z.string().min(1), stageId: z.string().min(1), name: z.string().min(1), description: z.string().optional(), plannedDate: isoDate, forecastDate: isoDate.optional(), actualDate: isoDate.optional(), status: milestoneStatusSchema, commentary: z.string().optional() });
+const noteSchema = z.object({ id: z.string().min(1), title: z.string().min(1), type: noteTypeSchema, date: isoDate, content: z.string(), tags: z.array(z.string()).optional(), createdAt: isoDateTime, updatedAt: isoDateTime });
+const decisionSchema = z.object({ id: z.string().min(1), title: z.string().min(1), context: z.string().optional(), decisionText: z.string(), decisionMaker: z.string().optional(), decisionDate: isoDate, impact: impactLevelSchema.optional(), evidenceLinks: z.array(z.string()).optional() });
+const actionSchema = z.object({ id: z.string().min(1), description: z.string(), owner: z.string(), dueDate: isoDate.optional(), status: actionStatusSchema, commentary: z.string().optional() });
+const dependencySchema = z.object({ id: z.string().min(1), title: z.string().min(1), description: z.string(), sourceWorkstreamId: z.string().min(1), sourceMilestoneId: z.string().optional(), targetWorkstreamId: z.string().min(1), targetMilestoneId: z.string().optional(), owner: z.string(), dueDate: isoDate, status: dependencyStatusSchema, commentary: z.string().optional() });
+const riskSchema = z.object({ id: z.string().min(1), title: z.string().min(1), description: z.string(), owner: z.string(), probability: raidLevelSchema, impact: raidLevelSchema, mitigation: z.string(), status: riskStatusSchema, relatedWorkstreamId: z.string().optional(), relatedMilestoneId: z.string().optional() });
+const assumptionSchema = z.object({ id: z.string().min(1), title: z.string().min(1), description: z.string(), owner: z.string(), validationDate: isoDate, status: assumptionStatusSchema, relatedWorkstreamId: z.string().optional() });
+const issueSchema = z.object({ id: z.string().min(1), title: z.string().min(1), description: z.string(), owner: z.string(), severity: issueSeveritySchema, status: issueStatusSchema, targetResolutionDate: isoDate, relatedWorkstreamId: z.string().optional(), relatedMilestoneId: z.string().optional() });
+const linkSchema = z.object({ id: z.string().min(1), sourceType: entityTypeSchema, sourceId: z.string().min(1), targetType: entityTypeSchema, targetId: z.string().min(1), relationship: z.string().optional() });
+const reportSchema = z.object({ id: z.string().min(1), type: reportTypeSchema, title: z.string().min(1), generatedAt: isoDateTime, content: z.string() });
+
+const projectWorkspaceSchema = projectSchema.extend({
+  workstreams: z.array(workstreamSchema).default([]), stages: z.array(stageSchema).default([]), milestones: z.array(milestoneSchema).default([]), notes: z.array(noteSchema).default([]), decisions: z.array(decisionSchema).default([]), actions: z.array(actionSchema).default([]), dependencies: z.array(dependencySchema).default([]), risks: z.array(riskSchema).default([]), assumptions: z.array(assumptionSchema).default([]), issues: z.array(issueSchema).default([]), links: z.array(linkSchema).default([]), reports: z.array(reportSchema).default([]),
+});
+
+export const legacyPmgovFileSchema = z.object({
+  schemaVersion: z.literal(CURRENT_SCHEMA_VERSION), fileMetadata: z.object({ createdAt: isoDateTime, updatedAt: isoDateTime, createdByAppVersion: z.string().optional() }), project: projectSchema,
+  workstreams: z.array(workstreamSchema), stages: z.array(stageSchema), milestones: z.array(milestoneSchema), notes: z.array(noteSchema), decisions: z.array(decisionSchema), actions: z.array(actionSchema), dependencies: z.array(dependencySchema).default([]), risks: z.array(riskSchema).default([]), assumptions: z.array(assumptionSchema).default([]), issues: z.array(issueSchema).default([]), links: z.array(linkSchema), reports: z.array(reportSchema),
+});
 
 export const pmgovFileSchema = z.object({
   schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
-  fileMetadata: z.object({
-    createdAt: isoDateTime,
-    updatedAt: isoDateTime,
-    createdByAppVersion: z.string().optional(),
-  }),
-  project: z.object({
-    id: z.string().min(1),
-    name: z.string().min(1, "Project name is required"),
-    description: z.string().optional(),
-    sponsor: z.string().optional(),
-    projectManager: z.string().min(1, "Project manager is required"),
-    startDate: isoDate.optional(),
-    targetDate: isoDate.optional(),
-    status: ragStatusSchema,
-    healthMode: healthModeSchema.optional(),
-    executiveSummary: z.string().optional(),
-  }),
-  workstreams: z.array(
-    z.object({
-      id: z.string().min(1),
-      name: z.string().min(1),
-      description: z.string().optional(),
-      status: workstreamStatusSchema,
-      healthMode: healthModeSchema.optional(),
-      commentary: z.string().optional(),
-      sortOrder: z.number(),
-    }),
-  ),
-  stages: z.array(
-    z.object({
-      id: z.string().min(1),
-      workstreamId: z.string().min(1),
-      name: z.string().min(1),
-      status: stageStatusSchema.optional(),
-      commentary: z.string().optional(),
-      sortOrder: z.number(),
-    }),
-  ),
-  milestones: z.array(
-    z.object({
-      id: z.string().min(1),
-      stageId: z.string().min(1),
-      name: z.string().min(1),
-      description: z.string().optional(),
-      plannedDate: isoDate,
-      forecastDate: isoDate.optional(),
-      actualDate: isoDate.optional(),
-      status: milestoneStatusSchema,
-      commentary: z.string().optional(),
-    }),
-  ),
-  notes: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      type: noteTypeSchema,
-      date: isoDate,
-      content: z.string(),
-      tags: z.array(z.string()).optional(),
-      createdAt: isoDateTime,
-      updatedAt: isoDateTime,
-    }),
-  ),
-  decisions: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      context: z.string().optional(),
-      decisionText: z.string(),
-      decisionMaker: z.string().optional(),
-      decisionDate: isoDate,
-      impact: impactLevelSchema.optional(),
-      evidenceLinks: z.array(z.string()).optional(),
-    }),
-  ),
-  actions: z.array(
-    z.object({
-      id: z.string().min(1),
-      description: z.string(),
-      owner: z.string(),
-      dueDate: isoDate.optional(),
-      status: actionStatusSchema,
-      commentary: z.string().optional(),
-    }),
-  ),
-  dependencies: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      description: z.string(),
-      sourceWorkstreamId: z.string().min(1),
-      sourceMilestoneId: z.string().optional(),
-      targetWorkstreamId: z.string().min(1),
-      targetMilestoneId: z.string().optional(),
-      owner: z.string(),
-      dueDate: isoDate,
-      status: dependencyStatusSchema,
-      commentary: z.string().optional(),
-    }),
-  ).default([]),
-
-  risks: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      description: z.string(),
-      owner: z.string(),
-      probability: raidLevelSchema,
-      impact: raidLevelSchema,
-      mitigation: z.string(),
-      status: riskStatusSchema,
-      relatedWorkstreamId: z.string().optional(),
-      relatedMilestoneId: z.string().optional(),
-    }),
-  ).default([]),
-  assumptions: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      description: z.string(),
-      owner: z.string(),
-      validationDate: isoDate,
-      status: assumptionStatusSchema,
-      relatedWorkstreamId: z.string().optional(),
-    }),
-  ).default([]),
-  issues: z.array(
-    z.object({
-      id: z.string().min(1),
-      title: z.string().min(1),
-      description: z.string(),
-      owner: z.string(),
-      severity: issueSeveritySchema,
-      status: issueStatusSchema,
-      targetResolutionDate: isoDate,
-      relatedWorkstreamId: z.string().optional(),
-      relatedMilestoneId: z.string().optional(),
-    }),
-  ).default([]),
-  links: z.array(
-    z.object({
-      id: z.string().min(1),
-      sourceType: entityTypeSchema,
-      sourceId: z.string().min(1),
-      targetType: entityTypeSchema,
-      targetId: z.string().min(1),
-      relationship: z.string().optional(),
-    }),
-  ),
-  reports: z.array(
-    z.object({
-      id: z.string().min(1),
-      type: reportTypeSchema,
-      title: z.string().min(1),
-      generatedAt: isoDateTime,
-      content: z.string(),
-    }),
-  ),
+  fileMetadata: z.object({ createdAt: isoDateTime, updatedAt: isoDateTime, createdByAppVersion: z.string().optional() }),
+  portfolio: z.object({ name: z.string().min(1), description: z.string().optional(), sponsor: z.string().optional(), portfolioManager: z.string().optional() }),
+  activeProjectId: z.string().min(1),
+  projects: z.array(projectWorkspaceSchema).min(1),
+}).and(legacyPmgovFileSchema).superRefine((file, ctx) => {
+  if (!file.projects.some((project) => project.id === file.activeProjectId)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["activeProjectId"], message: "Active project must exist in projects" });
 });
 
 export type ValidationResult =
   | { success: true; data: PmgovFile }
   | { success: false; error: string };
 
+function emptyPortfolioProject(): PortfolioProject {
+  return {
+    id: crypto.randomUUID(),
+    name: "Untitled Project",
+    projectManager: "Project Manager",
+    status: "not_set",
+    healthMode: "auto",
+    description: "",
+    sponsor: "",
+    executiveSummary: "",
+    workstreams: [], stages: [], milestones: [], notes: [], decisions: [], actions: [], dependencies: [], risks: [], assumptions: [], issues: [], links: [], reports: [],
+  };
+}
+
+export function projectWorkspaceToLegacyFile(file: PmgovFile, project: PortfolioProject): LegacyPmgovFile {
+  const { workstreams, stages, milestones, notes, decisions, actions, dependencies, risks, assumptions, issues, links, reports, ...projectFields } = project;
+  return { schemaVersion: file.schemaVersion, fileMetadata: file.fileMetadata, project: projectFields, workstreams, stages, milestones, notes, decisions, actions, dependencies, risks, assumptions, issues, links, reports };
+}
+
+export function getActiveProjectWorkspace(file: PmgovFile): PortfolioProject {
+  const project = file.projects.find((item) => item.id === file.activeProjectId) ?? file.projects[0];
+  return { ...project, ...file.project, workstreams: file.workstreams, stages: file.stages, milestones: file.milestones, notes: file.notes, decisions: file.decisions, actions: file.actions, dependencies: file.dependencies, risks: file.risks, assumptions: file.assumptions, issues: file.issues, links: file.links, reports: file.reports };
+}
+
+export function getActiveProjectFile(file: PmgovFile): LegacyPmgovFile {
+  return projectWorkspaceToLegacyFile(file, getActiveProjectWorkspace(file));
+}
+
+export function replaceActiveProjectFromFile(file: PmgovFile, activeFile: LegacyPmgovFile): PmgovFile {
+  const project: PortfolioProject = { ...activeFile.project, workstreams: activeFile.workstreams, stages: activeFile.stages, milestones: activeFile.milestones, notes: activeFile.notes, decisions: activeFile.decisions, actions: activeFile.actions, dependencies: activeFile.dependencies, risks: activeFile.risks, assumptions: activeFile.assumptions, issues: activeFile.issues, links: activeFile.links, reports: activeFile.reports };
+  return { ...file, activeProjectId: project.id, projects: file.projects.map((item) => (item.id === project.id ? project : item)) };
+}
+
+export function legacyFileToPortfolio(file: LegacyPmgovFile): PmgovFile {
+  const project: PortfolioProject = { ...file.project, workstreams: file.workstreams, stages: file.stages, milestones: file.milestones, notes: file.notes, decisions: file.decisions, actions: file.actions, dependencies: file.dependencies, risks: file.risks, assumptions: file.assumptions, issues: file.issues, links: file.links, reports: file.reports };
+  return {
+    ...file,
+    portfolio: { name: `${file.project.name} Portfolio`, description: file.project.description ?? "", sponsor: file.project.sponsor ?? "", portfolioManager: file.project.projectManager },
+    activeProjectId: file.project.id,
+    projects: [project],
+  };
+}
+
 export function createEmptyProjectFile(): PmgovFile {
   const now = new Date().toISOString();
+  const project = emptyPortfolioProject();
 
+  const { workstreams, stages, milestones, notes, decisions, actions, dependencies, risks, assumptions, issues, links, reports, ...projectFields } = project;
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    fileMetadata: {
-      createdAt: now,
-      updatedAt: now,
-      createdByAppVersion: APP_VERSION,
-    },
-    project: {
-      id: crypto.randomUUID(),
-      name: "Untitled Project",
-      projectManager: "Project Manager",
-      status: "not_set",
-      healthMode: "auto",
-      description: "",
-      sponsor: "",
-      executiveSummary: "",
-    },
-    workstreams: [],
-    stages: [],
-    milestones: [],
-    notes: [],
-    decisions: [],
-    actions: [],
-    dependencies: [],
-    risks: [],
-    assumptions: [],
-    issues: [],
-    links: [],
-    reports: [],
+    fileMetadata: { createdAt: now, updatedAt: now, createdByAppVersion: APP_VERSION },
+    project: projectFields, workstreams, stages, milestones, notes, decisions, actions, dependencies, risks, assumptions, issues, links, reports,
+    portfolio: { name: "Untitled Portfolio", description: "", sponsor: "", portfolioManager: "Portfolio Manager" },
+    activeProjectId: project.id,
+    projects: [project],
   };
+}
+
+export function createEmptyPortfolioProject(): PortfolioProject {
+  return emptyPortfolioProject();
 }
 
 export function validatePmgovFile(value: unknown): ValidationResult {
   const result = pmgovFileSchema.safeParse(value);
+  if (result.success) return { success: true, data: result.data };
 
-  if (result.success) {
-    return { success: true, data: result.data };
-  }
+  const legacyResult = legacyPmgovFileSchema.safeParse(value);
+  if (legacyResult.success) return { success: true, data: legacyFileToPortfolio(legacyResult.data) };
 
-  const message = result.error.issues
-    .slice(0, 5)
-    .map((issue) => `${issue.path.join(".") || "file"}: ${issue.message}`)
-    .join("; ");
-
-  return {
-    success: false,
-    error: `Invalid .pmgov file. ${message}`,
-  };
+  const message = result.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "file"}: ${issue.message}`).join("; ");
+  return { success: false, error: `Invalid .pmgov file. ${message}` };
 }
 
 export function parsePmgovJson(text: string): ValidationResult {
@@ -254,8 +157,10 @@ export function parsePmgovJson(text: string): ValidationResult {
 }
 
 export function preparePmgovForSave(file: PmgovFile): PmgovFile {
+  const activeProject: PortfolioProject = { ...file.project, workstreams: file.workstreams, stages: file.stages, milestones: file.milestones, notes: file.notes, decisions: file.decisions, actions: file.actions, dependencies: file.dependencies, risks: file.risks, assumptions: file.assumptions, issues: file.issues, links: file.links, reports: file.reports };
   return {
     ...file,
+    projects: file.projects.map((project) => (project.id === file.activeProjectId ? activeProject : project)),
     fileMetadata: {
       ...file.fileMetadata,
       updatedAt: new Date().toISOString(),
@@ -392,7 +297,7 @@ function actionHealthReasons(actions: ActionItem[], today: string) {
   return { redReasons, amberReasons };
 }
 
-export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstream, today: string): CalculatedHealth {
+export function calculateWorkstreamHealth(file: LegacyPmgovFile, workstream: Workstream, today: string): CalculatedHealth {
   const stages = file.stages.filter((stage) => stage.workstreamId === workstream.id);
   const stageIds = new Set(stages.map((stage) => stage.id));
   const milestones = file.milestones.filter((milestone) => stageIds.has(milestone.stageId));
@@ -447,7 +352,7 @@ export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstrea
   };
 }
 
-export function calculateProjectHealth(file: PmgovFile, today: string): CalculatedHealth {
+export function calculateProjectHealth(file: LegacyPmgovFile, today: string): CalculatedHealth {
   const workstreamHealth = file.workstreams.map((workstream) => ({ workstream, health: calculateWorkstreamHealth(file, workstream, today) }));
   const redReasons: string[] = [];
   const amberReasons: string[] = [];
@@ -495,7 +400,7 @@ export function calculateProjectHealth(file: PmgovFile, today: string): Calculat
   };
 }
 
-export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: string, today: string) {
+export function buildExecutiveReportMarkdown(file: LegacyPmgovFile, generatedAt: string, today: string) {
   const lineItems = (items: string[], emptyText: string) => (items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : emptyText);
   const milestoneContext = (stageId: string) => {
     const stage = file.stages.find((item) => item.id === stageId);
@@ -534,4 +439,31 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
 
   return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject health: ${statusLabel(projectHealth.status)} (${statusLabel(projectHealth.mode)}${projectHealth.mode === "manual" ? ` override; auto would be ${statusLabel(projectHealth.calculatedStatus)}` : ""})
 Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## RAID Summary\n${lineItems(raidSummaryItems, "No RAID records captured.")}\n\n## Top Risks\n${lineItems(topRiskItems, "No open risks captured.")}\n\n## Open Issues\n${lineItems(openIssueItems, "No open issues captured.")}\n\n## Dependency Summary\n${lineItems(dependencySummaryItems, "No dependencies captured.")}\n\n## Blocked Dependencies\n${lineItems(blockedDependencyItems, "No blocked dependencies captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+}
+
+export function calculatePortfolioHealth(file: PmgovFile, today: string): CalculatedHealth {
+  const redReasons: string[] = [];
+  const amberReasons: string[] = [];
+  file.projects.forEach((project) => {
+    const health = calculateProjectHealth(projectWorkspaceToLegacyFile(file, project), today);
+    if (health.status === "red") redReasons.push(`Project "${project.name}" is red`);
+    if (health.status === "amber") amberReasons.push(`Project "${project.name}" is amber`);
+    project.issues.filter((issue) => issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").forEach((issue) => redReasons.push(`Critical issue "${issue.title}" is open in ${project.name}`));
+    project.risks.filter((risk) => risk.status !== "closed" && risk.status !== "mitigated" && (risk.probability === "high" || risk.impact === "high")).forEach((risk) => amberReasons.push(`High risk "${risk.title}" is open in ${project.name}`));
+    project.dependencies.filter((dependency) => dependency.status === "blocked").forEach((dependency) => redReasons.push(`Dependency "${dependency.title}" is blocked in ${project.name}`));
+  });
+  const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : "green";
+  return { status: calculatedStatus, mode: "auto", calculatedStatus, reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : ["No red projects, critical issues, high risks, or blocked dependencies found across the portfolio."] };
+}
+
+export function buildPortfolioExecutiveReportMarkdown(file: PmgovFile, generatedAt: string, today: string) {
+  const portfolioHealth = calculatePortfolioHealth(file, today);
+  const projectSummary = file.projects.map((project) => {
+    const health = calculateProjectHealth(projectWorkspaceToLegacyFile(file, project), today);
+    return `| ${project.id} | ${project.name} | ${statusLabel(health.status)} | ${project.sponsor || "Not set"} | ${project.projectManager || "Not set"} | ${project.startDate || "Not set"} | ${project.targetDate || "Not set"} |`;
+  }).join("\n");
+  const portfolioRisks = file.projects.flatMap((project) => project.risks.filter((risk) => risk.status !== "closed" && risk.status !== "mitigated").map((risk) => `- ${project.name}: ${risk.title} — Probability: ${statusLabel(risk.probability)}; Impact: ${statusLabel(risk.impact)}; Owner: ${risk.owner || "Unassigned"}.`));
+  const criticalIssues = file.projects.flatMap((project) => project.issues.filter((issue) => issue.severity === "critical" && issue.status !== "resolved" && issue.status !== "closed").map((issue) => `- ${project.name}: ${issue.title} — Owner: ${issue.owner || "Unassigned"}; Target: ${issue.targetResolutionDate}.`));
+  const crossProjectDependencies = file.projects.flatMap((project) => project.dependencies.filter((dependency) => dependency.status !== "resolved").map((dependency) => `- ${project.name}: ${dependency.title} — Status: ${statusLabel(dependency.status)}; Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate}.`));
+  return `# Portfolio Executive Report — ${file.portfolio.name}\n\nGenerated: ${generatedAt}\n\n## Portfolio Health\nPortfolio health: ${statusLabel(portfolioHealth.status)}\n\nHealth reasons: ${portfolioHealth.reasons.join("; ")}\n\n## Project Summary\n| Project ID | Name | Health | Sponsor | Project Manager | Start Date | Target Date |\n| --- | --- | --- | --- | --- | --- | --- |\n${projectSummary || "| Not set | No projects | not set | Not set | Not set | Not set | Not set |"}\n\n## Portfolio Risks\n${portfolioRisks.length > 0 ? portfolioRisks.join("\n") : "No open portfolio risks captured."}\n\n## Critical Issues\n${criticalIssues.length > 0 ? criticalIssues.join("\n") : "No open critical issues captured."}\n\n## Cross-project Dependencies\n${crossProjectDependencies.length > 0 ? crossProjectDependencies.join("\n") : "No open dependencies captured."}\n`;
 }
