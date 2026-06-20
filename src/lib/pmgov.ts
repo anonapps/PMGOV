@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { PmgovFile } from "@/types/pmgov";
+import type { ActionItem, PmgovFile, RagStatus, Workstream } from "@/types/pmgov";
 
 export const APP_VERSION = "0.1.0";
 export const CURRENT_SCHEMA_VERSION = "1.0.0";
@@ -18,6 +18,7 @@ const noteTypeSchema = z.enum(["meeting", "workshop", "general"]);
 const impactLevelSchema = z.enum(["low", "medium", "high", "critical", "not_set"]);
 const entityTypeSchema = z.enum(["note", "decision", "action", "milestone", "workstream", "stage"]);
 const reportTypeSchema = z.enum(["status", "steering_committee", "executive"]);
+const healthModeSchema = z.enum(["auto", "manual"]);
 
 export const pmgovFileSchema = z.object({
   schemaVersion: z.literal(CURRENT_SCHEMA_VERSION),
@@ -35,6 +36,7 @@ export const pmgovFileSchema = z.object({
     startDate: isoDate.optional(),
     targetDate: isoDate.optional(),
     status: ragStatusSchema,
+    healthMode: healthModeSchema.optional(),
     executiveSummary: z.string().optional(),
   }),
   workstreams: z.array(
@@ -43,6 +45,7 @@ export const pmgovFileSchema = z.object({
       name: z.string().min(1),
       description: z.string().optional(),
       status: workstreamStatusSchema,
+      healthMode: healthModeSchema.optional(),
       commentary: z.string().optional(),
       sortOrder: z.number(),
     }),
@@ -144,6 +147,7 @@ export function createEmptyProjectFile(): PmgovFile {
       name: "Untitled Project",
       projectManager: "Project Manager",
       status: "not_set",
+      healthMode: "auto",
       description: "",
       sponsor: "",
       executiveSummary: "",
@@ -261,6 +265,122 @@ export function getMilestoneAttentionReasons(milestone: PmgovFile["milestones"][
   return reasons;
 }
 
+export type CalculatedHealth = {
+  status: RagStatus;
+  mode: "auto" | "manual";
+  reasons: string[];
+  calculatedStatus: RagStatus;
+  manualStatus?: RagStatus;
+};
+
+function isOpenAction(action: ActionItem) {
+  return action.status !== "completed" && action.status !== "cancelled";
+}
+
+function isCriticalAction(action: ActionItem) {
+  return /\bcritical\b/i.test(action.commentary ?? "") || /\bcritical\b/i.test(action.description);
+}
+
+function actionHealthReasons(actions: ActionItem[], today: string) {
+  const redReasons: string[] = [];
+  const amberReasons: string[] = [];
+
+  actions.filter(isOpenAction).forEach((action) => {
+    const daysUntilDue = daysBetween(today, action.dueDate);
+    if (daysUntilDue !== null && daysUntilDue < 0) {
+      const label = `Action "${action.description}" is ${formatDateDistance(daysUntilDue)}`;
+      if (isCriticalAction(action)) {
+        redReasons.push(`${label} and marked critical`);
+      } else {
+        amberReasons.push(label);
+      }
+    }
+  });
+
+  return { redReasons, amberReasons };
+}
+
+export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstream, today: string): CalculatedHealth {
+  const stages = file.stages.filter((stage) => stage.workstreamId === workstream.id);
+  const stageIds = new Set(stages.map((stage) => stage.id));
+  const milestones = file.milestones.filter((milestone) => stageIds.has(milestone.stageId));
+  const milestoneIds = new Set(milestones.map((milestone) => milestone.id));
+  const linkedActionIds = new Set(
+    file.links
+      .filter((link) => link.sourceType === "action" && ((link.targetType === "workstream" && link.targetId === workstream.id) || (link.targetType === "stage" && stageIds.has(link.targetId)) || (link.targetType === "milestone" && milestoneIds.has(link.targetId))))
+      .map((link) => link.sourceId),
+  );
+  const actions = file.actions.filter((action) => linkedActionIds.has(action.id));
+  const redReasons: string[] = [];
+  const amberReasons: string[] = [];
+
+  milestones.forEach((milestone) => {
+    const isComplete = milestone.status === "complete";
+    const plannedDistance = daysBetween(today, milestone.plannedDate);
+    const forecastVariance = daysBetween(milestone.plannedDate, milestone.forecastDate);
+
+    if (!isComplete && plannedDistance !== null && plannedDistance < 0) redReasons.push(`Milestone "${milestone.name}" is overdue`);
+    if (milestone.status === "red") redReasons.push(`Milestone "${milestone.name}" is red`);
+    if (milestone.status === "amber") amberReasons.push(`Milestone "${milestone.name}" is amber`);
+    if (!isComplete && plannedDistance !== null && plannedDistance >= 0 && plannedDistance <= 30) amberReasons.push(`Milestone "${milestone.name}" is due within 30 days`);
+    if (forecastVariance !== null && forecastVariance > 0) amberReasons.push(`Milestone "${milestone.name}" forecast is later than planned`);
+  });
+
+  const actionReasons = actionHealthReasons(actions, today);
+  redReasons.push(...actionReasons.redReasons);
+  amberReasons.push(...actionReasons.amberReasons);
+
+  const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : milestones.length > 0 || actions.length > 0 ? "green" : "not_set";
+  const mode = workstream.healthMode ?? "auto";
+  const manualStatus = workstream.status === "complete" ? "green" : workstream.status;
+
+  return {
+    status: mode === "manual" ? manualStatus : calculatedStatus,
+    mode,
+    calculatedStatus,
+    manualStatus: mode === "manual" ? manualStatus : undefined,
+    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : calculatedStatus === "green" ? ["No overdue milestones, overdue open actions, red milestones, or amber milestones found for this workstream."] : ["No milestones or linked actions are available to calculate workstream health."],
+  };
+}
+
+export function calculateProjectHealth(file: PmgovFile, today: string): CalculatedHealth {
+  const workstreamHealth = file.workstreams.map((workstream) => ({ workstream, health: calculateWorkstreamHealth(file, workstream, today) }));
+  const redReasons: string[] = [];
+  const amberReasons: string[] = [];
+
+  workstreamHealth.forEach(({ workstream, health }) => {
+    if (health.status === "red") redReasons.push(`Workstream "${workstream.name}" is red`);
+    if (health.status === "amber") amberReasons.push(`Workstream "${workstream.name}" is amber`);
+  });
+
+  file.milestones.forEach((milestone) => {
+    const isComplete = milestone.status === "complete";
+    const plannedDistance = daysBetween(today, milestone.plannedDate);
+    const forecastVariance = daysBetween(milestone.plannedDate, milestone.forecastDate);
+
+    if (!isComplete && plannedDistance !== null && plannedDistance < 0) redReasons.push(`Milestone "${milestone.name}" is overdue`);
+    if (milestone.status === "red") redReasons.push(`Milestone "${milestone.name}" is red`);
+    if (milestone.status === "amber") amberReasons.push(`Milestone "${milestone.name}" is amber`);
+    if (!isComplete && plannedDistance !== null && plannedDistance >= 0 && plannedDistance <= 30) amberReasons.push(`Milestone "${milestone.name}" is due within 30 days`);
+    if (forecastVariance !== null && forecastVariance > 0) amberReasons.push(`Milestone "${milestone.name}" forecast is later than planned`);
+  });
+
+  const actionReasons = actionHealthReasons(file.actions, today);
+  redReasons.push(...actionReasons.redReasons);
+  amberReasons.push(...actionReasons.amberReasons);
+
+  const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : "green";
+  const mode = file.project.healthMode ?? "auto";
+
+  return {
+    status: mode === "manual" ? file.project.status : calculatedStatus,
+    mode,
+    calculatedStatus,
+    manualStatus: mode === "manual" ? file.project.status : undefined,
+    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : ["No overdue milestones, overdue open actions, red workstreams, red milestones, amber workstreams, or amber milestones found."],
+  };
+}
+
 export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: string, today: string) {
   const lineItems = (items: string[], emptyText: string) => (items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : emptyText);
   const milestoneContext = (stageId: string) => {
@@ -280,7 +400,11 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
     .sort((a, b) => (a.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER) - (b.daysUntilPlanned ?? Number.MAX_SAFE_INTEGER))
     .slice(0, 8)
     .map(({ milestone, workstream, daysUntilPlanned }) => `${milestone.plannedDate} (${formatDateDistance(daysUntilPlanned)}): ${milestone.name} — ${workstream?.name ?? "Unassigned workstream"}.`);
-  const workstreamItems = file.workstreams.map((workstream) => `${workstream.name}: ${statusLabel(workstream.status)}${workstream.commentary ? ` — ${workstream.commentary}` : ""}`);
+  const projectHealth = calculateProjectHealth(file, today);
+  const workstreamItems = file.workstreams.map((workstream) => {
+    const health = calculateWorkstreamHealth(file, workstream, today);
+    return `${workstream.name}: ${statusLabel(health.status)} (${statusLabel(health.mode)}${health.mode === "manual" ? ` override; auto would be ${statusLabel(health.calculatedStatus)}` : ""}) — ${health.reasons.join("; ")}${workstream.commentary ? ` — ${workstream.commentary}` : ""}`;
+  });
   const actionItems = file.actions
     .filter((action) => action.status !== "completed" && action.status !== "cancelled")
     .map((action) => `${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysBetween(today, action.dueDate))})` : "No due date"}; Status: ${statusLabel(action.status)}.`);
@@ -289,5 +413,6 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
     .slice(0, 8)
     .map((decision) => `${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}. ${decision.decisionText}`);
 
-  return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject status: ${statusLabel(file.project.status)}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+  return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject health: ${statusLabel(projectHealth.status)} (${statusLabel(projectHealth.mode)}${projectHealth.mode === "manual" ? ` override; auto would be ${statusLabel(projectHealth.calculatedStatus)}` : ""})
+Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
 }

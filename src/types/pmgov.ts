@@ -7,6 +7,7 @@ export type NoteType = "meeting" | "workshop" | "general";
 export type ImpactLevel = "low" | "medium" | "high" | "critical" | "not_set";
 export type EntityType = "note" | "decision" | "action" | "milestone" | "workstream" | "stage";
 export type ReportType = "status" | "steering_committee" | "executive";
+export type HealthMode = "auto" | "manual";
 
 export interface PmgovFile {
   schemaVersion: "1.0.0";
@@ -37,6 +38,7 @@ export interface Project {
   startDate?: string;
   targetDate?: string;
   status: RagStatus;
+  healthMode?: HealthMode;
   executiveSummary?: string;
 }
 
@@ -45,6 +47,7 @@ export interface Workstream {
   name: string;
   description?: string;
   status: WorkstreamStatus;
+  healthMode?: HealthMode;
   commentary?: string;
   sortOrder: number;
 }
