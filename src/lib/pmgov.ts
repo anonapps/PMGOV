@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActionItem, PmgovFile, RagStatus, Workstream } from "@/types/pmgov";
+import type { ActionItem, Dependency, PmgovFile, RagStatus, Workstream } from "@/types/pmgov";
 
 export const APP_VERSION = "0.1.0";
 export const CURRENT_SCHEMA_VERSION = "1.0.0";
@@ -14,6 +14,7 @@ const workstreamStatusSchema = z.enum(["green", "amber", "red", "not_set", "comp
 const stageStatusSchema = z.enum(["not_started", "in_progress", "complete", "blocked"]);
 const milestoneStatusSchema = z.enum(["green", "amber", "red", "not_set", "complete"]);
 const actionStatusSchema = z.enum(["open", "in_progress", "completed", "cancelled"]);
+const dependencyStatusSchema = z.enum(["open", "in_progress", "resolved", "blocked"]);
 const noteTypeSchema = z.enum(["meeting", "workshop", "general"]);
 const impactLevelSchema = z.enum(["low", "medium", "high", "critical", "not_set"]);
 const entityTypeSchema = z.enum(["note", "decision", "action", "milestone", "workstream", "stage"]);
@@ -107,6 +108,21 @@ export const pmgovFileSchema = z.object({
       commentary: z.string().optional(),
     }),
   ),
+  dependencies: z.array(
+    z.object({
+      id: z.string().min(1),
+      title: z.string().min(1),
+      description: z.string(),
+      sourceWorkstreamId: z.string().min(1),
+      sourceMilestoneId: z.string().optional(),
+      targetWorkstreamId: z.string().min(1),
+      targetMilestoneId: z.string().optional(),
+      owner: z.string(),
+      dueDate: isoDate,
+      status: dependencyStatusSchema,
+      commentary: z.string().optional(),
+    }),
+  ).default([]),
   links: z.array(
     z.object({
       id: z.string().min(1),
@@ -158,6 +174,7 @@ export function createEmptyProjectFile(): PmgovFile {
     notes: [],
     decisions: [],
     actions: [],
+    dependencies: [],
     links: [],
     reports: [],
   };
@@ -265,6 +282,34 @@ export function getMilestoneAttentionReasons(milestone: PmgovFile["milestones"][
   return reasons;
 }
 
+
+export function isOpenDependency(dependency: Dependency) {
+  return dependency.status !== "resolved";
+}
+
+export function isDependencyOverdue(dependency: Dependency, today: string) {
+  const daysUntilDue = daysBetween(today, dependency.dueDate);
+  return isOpenDependency(dependency) && daysUntilDue !== null && daysUntilDue < 0;
+}
+
+function dependencyHealthReasons(dependencies: Dependency[], today: string) {
+  const redReasons: string[] = [];
+  const amberReasons: string[] = [];
+
+  dependencies.filter(isOpenDependency).forEach((dependency) => {
+    if (dependency.status === "blocked") {
+      redReasons.push(`Dependency "${dependency.title}" is blocked`);
+      return;
+    }
+
+    if (isDependencyOverdue(dependency, today)) {
+      amberReasons.push(`Dependency "${dependency.title}" is ${formatDateDistance(daysBetween(today, dependency.dueDate))}`);
+    }
+  });
+
+  return { redReasons, amberReasons };
+}
+
 export type CalculatedHealth = {
   status: RagStatus;
   mode: "auto" | "manual";
@@ -330,7 +375,12 @@ export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstrea
   redReasons.push(...actionReasons.redReasons);
   amberReasons.push(...actionReasons.amberReasons);
 
-  const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : milestones.length > 0 || actions.length > 0 ? "green" : "not_set";
+  const dependencies = file.dependencies.filter((dependency) => dependency.sourceWorkstreamId === workstream.id || dependency.targetWorkstreamId === workstream.id);
+  const dependencyReasons = dependencyHealthReasons(dependencies, today);
+  redReasons.push(...dependencyReasons.redReasons);
+  amberReasons.push(...dependencyReasons.amberReasons);
+
+  const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : milestones.length > 0 || actions.length > 0 || dependencies.length > 0 ? "green" : "not_set";
   const mode = workstream.healthMode ?? "auto";
   const manualStatus = workstream.status === "complete" ? "green" : workstream.status;
 
@@ -339,7 +389,7 @@ export function calculateWorkstreamHealth(file: PmgovFile, workstream: Workstrea
     mode,
     calculatedStatus,
     manualStatus: mode === "manual" ? manualStatus : undefined,
-    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : calculatedStatus === "green" ? ["No overdue milestones, overdue open actions, red milestones, or amber milestones found for this workstream."] : ["No milestones or linked actions are available to calculate workstream health."],
+    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : calculatedStatus === "green" ? ["No overdue milestones, overdue open actions, blocked dependencies, overdue dependencies, red milestones, or amber milestones found for this workstream."] : ["No milestones, linked actions, or dependencies are available to calculate workstream health."],
   };
 }
 
@@ -369,6 +419,10 @@ export function calculateProjectHealth(file: PmgovFile, today: string): Calculat
   redReasons.push(...actionReasons.redReasons);
   amberReasons.push(...actionReasons.amberReasons);
 
+  const dependencyReasons = dependencyHealthReasons(file.dependencies, today);
+  redReasons.push(...dependencyReasons.redReasons);
+  amberReasons.push(...dependencyReasons.amberReasons);
+
   const calculatedStatus = redReasons.length > 0 ? "red" : amberReasons.length > 0 ? "amber" : "green";
   const mode = file.project.healthMode ?? "auto";
 
@@ -377,7 +431,7 @@ export function calculateProjectHealth(file: PmgovFile, today: string): Calculat
     mode,
     calculatedStatus,
     manualStatus: mode === "manual" ? file.project.status : undefined,
-    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : ["No overdue milestones, overdue open actions, red workstreams, red milestones, amber workstreams, or amber milestones found."],
+    reasons: redReasons.length > 0 ? redReasons : amberReasons.length > 0 ? amberReasons : ["No overdue milestones, overdue open actions, blocked dependencies, overdue dependencies, red workstreams, red milestones, amber workstreams, or amber milestones found."],
   };
 }
 
@@ -408,11 +462,13 @@ export function buildExecutiveReportMarkdown(file: PmgovFile, generatedAt: strin
   const actionItems = file.actions
     .filter((action) => action.status !== "completed" && action.status !== "cancelled")
     .map((action) => `${action.description} — Owner: ${action.owner || "Unassigned"}; Due: ${action.dueDate ? `${action.dueDate} (${formatDateDistance(daysBetween(today, action.dueDate))})` : "No due date"}; Status: ${statusLabel(action.status)}.`);
+  const dependencySummaryItems = file.dependencies.map((dependency) => `${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate} (${formatDateDistance(daysBetween(today, dependency.dueDate))}); Status: ${statusLabel(dependency.status)}.`);
+  const blockedDependencyItems = file.dependencies.filter((dependency) => dependency.status === "blocked").map((dependency) => `${dependency.title} — Owner: ${dependency.owner || "Unassigned"}; Due: ${dependency.dueDate}; ${dependency.commentary || "No commentary"}.`);
   const decisionItems = [...file.decisions]
     .sort((a, b) => b.decisionDate.localeCompare(a.decisionDate))
     .slice(0, 8)
     .map((decision) => `${decision.decisionDate}: ${decision.title}${decision.decisionMaker ? ` — ${decision.decisionMaker}` : ""}. ${decision.decisionText}`);
 
   return `# Executive Status Report — ${file.project.name}\n\nGenerated: ${generatedAt}\n\n## Project Overview\n${file.project.description || "No project description captured."}\n\nSponsor: ${file.project.sponsor || "Not set"}\nProject Manager: ${file.project.projectManager || "Not set"}\nStart Date: ${file.project.startDate || "Not set"}\nTarget Date: ${file.project.targetDate || "Not set"}\n\n## Overall Status\nProject health: ${statusLabel(projectHealth.status)} (${statusLabel(projectHealth.mode)}${projectHealth.mode === "manual" ? ` override; auto would be ${statusLabel(projectHealth.calculatedStatus)}` : ""})
-Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
+Health reasons: ${projectHealth.reasons.join("; ")}\n\n## Key Risks / Attention Items\n${lineItems(attentionItems, "No milestones requiring attention.")}\n\n## Milestone Outlook\n${lineItems(upcomingItems, "No upcoming milestones captured.")}\n\n## Workstream Health\n${lineItems(workstreamItems, "No workstreams captured.")}\n\n## Open Actions\n${lineItems(actionItems, "No open actions captured.")}\n\n## Dependency Summary\n${lineItems(dependencySummaryItems, "No dependencies captured.")}\n\n## Blocked Dependencies\n${lineItems(blockedDependencyItems, "No blocked dependencies captured.")}\n\n## Recent Decisions\n${lineItems(decisionItems, "No recent decisions captured.")}\n\n## Executive Summary\n${file.project.executiveSummary || "No executive summary has been entered for this project."}\n`;
 }
