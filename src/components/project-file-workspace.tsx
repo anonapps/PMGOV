@@ -241,7 +241,15 @@ export function ProjectFileWorkspace() {
   const isDirty = projectFile !== null && currentSnapshot !== lastSavedSnapshot;
   const validation = useMemo(() => (projectFile ? validatePmgovFile(projectFile) : null), [projectFile]);
 
+  function confirmDiscardUnsavedChanges(nextAction: string) {
+    return !isDirty || window.confirm(`You have unsaved changes. ${nextAction} will discard changes that have not been saved to a .pmgov file. Continue?`);
+  }
+
   function createNewProject() {
+    if (!confirmDiscardUnsavedChanges("Creating a new project")) {
+      return;
+    }
+
     const nextFile = createEmptyProjectFile();
     setProjectFile(nextFile);
     setLastSavedSnapshot(null);
@@ -259,8 +267,12 @@ export function ProjectFileWorkspace() {
       return;
     }
 
+    if (!confirmDiscardUnsavedChanges("Opening another file")) {
+      return;
+    }
+
     if (!selectedFile.name.toLowerCase().endsWith(".pmgov")) {
-      setMessage({ tone: "error", text: "Please choose a file with the .pmgov extension." });
+      setMessage({ tone: "error", text: "Please choose a valid .pmgov file. Other file types are not supported." });
       return;
     }
 
@@ -282,7 +294,7 @@ export function ProjectFileWorkspace() {
 
   function saveProject(saveAs = false) {
     if (!projectFile) {
-      setMessage({ tone: "error", text: "Create or open a project before saving." });
+      setMessage({ tone: "error", text: "Save is unavailable until you create a new project or open an existing .pmgov file." });
       return;
     }
 
@@ -337,7 +349,7 @@ export function ProjectFileWorkspace() {
     const childStageIds = new Set(childStages.map((stage) => stage.id));
     const childMilestones = projectFile?.milestones.filter((milestone) => childStageIds.has(milestone.stageId)) ?? [];
 
-    if (!window.confirm(`Delete ${workstream.name} and its ${childStages.length} stage(s) and ${childMilestones.length} milestone(s)?`)) {
+    if (!window.confirm(`Delete workstream "${workstream.name}"? This will also delete ${childStages.length} stage(s) and ${childMilestones.length} milestone(s). This cannot be undone.`)) {
       return;
     }
 
@@ -365,7 +377,7 @@ export function ProjectFileWorkspace() {
   function deleteStage(stage: Stage) {
     const childMilestones = projectFile?.milestones.filter((milestone) => milestone.stageId === stage.id) ?? [];
 
-    if (!window.confirm(`Delete ${stage.name} and its ${childMilestones.length} milestone(s)?`)) {
+    if (!window.confirm(`Delete stage "${stage.name}"? This will also delete ${childMilestones.length} milestone(s). This cannot be undone.`)) {
       return;
     }
 
@@ -385,7 +397,7 @@ export function ProjectFileWorkspace() {
   }
 
   function deleteMilestone(milestone: Milestone) {
-    if (!window.confirm(`Delete milestone ${milestone.name}?`)) {
+    if (!window.confirm(`Delete milestone "${milestone.name}"? This cannot be undone.`)) {
       return;
     }
 
@@ -419,7 +431,7 @@ export function ProjectFileWorkspace() {
             return (
               <section className="rounded-3xl border border-slate-200 bg-white p-6" id={`workstream-${workstream.id}`} key={workstream.id}>
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Selected workstream</p><h3 className="mt-2 text-2xl font-bold">{workstream.name}</h3></div><div className="flex gap-2"><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={() => addStage(workstream.id)} type="button">Add stage</button><button className="rounded-2xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" onClick={() => deleteWorkstream(workstream)} type="button">Delete</button></div></div>
-                <div className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { name: event.target.value })} value={workstream.name} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { status: event.target.value as WorkstreamStatus })} value={workstream.status}>{workstreamStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { description: event.target.value })} value={workstream.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { commentary: event.target.value })} value={workstream.commentary ?? ""} /></label></div>
+                <div className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Name <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { name: event.target.value })} value={workstream.name} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { status: event.target.value as WorkstreamStatus })} value={workstream.status}>{workstreamStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { description: event.target.value })} value={workstream.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { commentary: event.target.value })} value={workstream.commentary ?? ""} /></label></div>
                 <div className="mt-6 space-y-4">{stages.length === 0 ? (<p className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No stages yet. Add a stage for this workstream.</p>) : stages.map((stage) => {
                   const milestones = file.milestones.filter((milestone) => milestone.stageId === stage.id);
                   return (<div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={stage.id}><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div className="grid flex-1 gap-3 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Stage name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { name: event.target.value })} value={stage.name} /></label><label className="text-sm font-medium text-slate-700">Stage status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { status: event.target.value as StageStatus })} value={stage.status ?? "not_started"}>{stageStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Stage commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { commentary: event.target.value })} value={stage.commentary ?? ""} /></label></div><div className="flex gap-2"><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={() => addMilestone(stage.id)} type="button">Add milestone</button><button className="rounded-2xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" onClick={() => deleteStage(stage)} type="button">Delete</button></div></div><div className="mt-4 space-y-3">{milestones.length === 0 ? (<p className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No milestones yet for this stage.</p>) : milestones.map((milestone) => (<div className="rounded-2xl border border-slate-200 bg-white p-4" key={milestone.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Milestone name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { name: event.target.value })} value={milestone.name} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { status: event.target.value as MilestoneStatus })} value={milestone.status}>{milestoneStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><div className="rounded-2xl bg-slate-100 p-3 text-sm"><span className="font-semibold text-slate-500">Variance</span><span className="mt-1 block font-bold text-slate-900">{formatVariance(milestone)}</span></div><label className="text-sm font-medium text-slate-700">Planned date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { plannedDate: event.target.value })} type="date" value={milestone.plannedDate} /></label><label className="text-sm font-medium text-slate-700">Forecast date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { forecastDate: optionalDate(event.target.value) })} type="date" value={milestone.forecastDate ?? ""} /></label><label className="text-sm font-medium text-slate-700">Actual date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { actualDate: optionalDate(event.target.value) })} type="date" value={milestone.actualDate ?? ""} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteMilestone(milestone)} type="button">Delete milestone</button><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { description: event.target.value })} value={milestone.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { commentary: event.target.value })} value={milestone.commentary ?? ""} /></label></div></div>))}</div></div>);
@@ -632,7 +644,7 @@ export function ProjectFileWorkspace() {
   }
 
   function deleteNote(note: Note) {
-    if (!window.confirm(`Delete note: ${note.title}?`)) {
+    if (!window.confirm(`Delete note "${note.title}"? This cannot be undone.`)) {
       return;
     }
 
@@ -672,7 +684,7 @@ export function ProjectFileWorkspace() {
         ) : filteredNotes.length === 0 ? (
           <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No notes match the current search and filters.</p>
         ) : (
-          <div className="grid gap-5">{filteredNotes.map((note) => <article className="rounded-3xl border border-slate-200 bg-white p-5" key={note.id}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { title: event.target.value })} value={note.title} /></label><label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { type: event.target.value as NoteType })} value={note.type}>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { date: event.target.value })} type="date" value={note.date} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Content<textarea className="mt-2 min-h-40 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { content: event.target.value })} value={note.content} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-3">Tags<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { tags: parseTags(event.target.value) })} placeholder="Comma-separated tags" value={(note.tags ?? []).join(", ")} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteNote(note)} type="button">Delete Note</button><dl className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 md:col-span-2 xl:col-span-4 md:grid-cols-2"><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Created At</dt><dd className="mt-1">{formatReportGeneratedAt(note.createdAt)}</dd></div><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Updated At</dt><dd className="mt-1">{formatReportGeneratedAt(note.updatedAt)}</dd></div></dl></div></article>)}</div>
+          <div className="grid gap-5">{filteredNotes.map((note) => <article className="rounded-3xl border border-slate-200 bg-white p-5" key={note.id}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { title: event.target.value })} value={note.title} /></label><label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { type: event.target.value as NoteType })} value={note.type}>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { date: event.target.value })} type="date" value={note.date} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Content<textarea className="mt-2 min-h-40 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { content: event.target.value })} value={note.content} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-3">Tags<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { tags: parseTags(event.target.value) })} placeholder="Comma-separated tags" value={(note.tags ?? []).join(", ")} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteNote(note)} type="button">Delete Note</button><dl className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 md:col-span-2 xl:col-span-4 md:grid-cols-2"><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Created At</dt><dd className="mt-1">{formatReportGeneratedAt(note.createdAt)}</dd></div><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Updated At</dt><dd className="mt-1">{formatReportGeneratedAt(note.updatedAt)}</dd></div></dl></div></article>)}</div>
         )}
       </section>
     );
@@ -693,7 +705,7 @@ export function ProjectFileWorkspace() {
   }
 
   function deleteAction(action: ActionItem) {
-    if (!window.confirm(`Delete action: ${action.description}?`)) {
+    if (!window.confirm(`Delete action "${action.description}"? This cannot be undone.`)) {
       return;
     }
 
@@ -714,7 +726,7 @@ export function ProjectFileWorkspace() {
   }
 
   function deleteDecision(decision: Decision) {
-    if (!window.confirm(`Delete decision: ${decision.title}?`)) {
+    if (!window.confirm(`Delete decision "${decision.title}"? This cannot be undone.`)) {
       return;
     }
 
@@ -753,7 +765,7 @@ export function ProjectFileWorkspace() {
         ) : (
           <section className="rounded-3xl border border-slate-200 bg-white p-6">
             <div className="flex items-center justify-between gap-3"><div><h4 className="text-xl font-bold">Decisions</h4><p className="mt-1 text-sm text-slate-600">Record decision context, decision text, accountable maker, impact, and evidence links.</p></div><button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white" onClick={addDecision} type="button">Create Decision</button></div>
-            {sortedDecisions.length === 0 ? <p className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No decisions captured yet.</p> : <div className="mt-5 space-y-4">{sortedDecisions.map((decision) => <article className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={decision.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { title: event.target.value })} value={decision.title} /></label><label className="text-sm font-medium text-slate-700">Decision Maker<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionMaker: event.target.value })} value={decision.decisionMaker ?? ""} /></label><label className="text-sm font-medium text-slate-700">Decision Date<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionDate: event.target.value })} type="date" value={decision.decisionDate} /></label><label className="text-sm font-medium text-slate-700">Impact<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { impact: event.target.value as ImpactLevel })} value={decision.impact ?? "low"}>{impactLevels.map((impact) => <option key={impact} value={impact}>{statusLabel(impact)}</option>)}</select></label><button className="self-end rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteDecision(decision)} type="button">Delete Decision</button><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Context<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { context: event.target.value })} value={decision.context ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Decision Text<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionText: event.target.value })} value={decision.decisionText} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Evidence Links<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecisionEvidenceLinks(decision.id, event.target.value)} placeholder="One link per line" value={(decision.evidenceLinks ?? []).join("\n")} /></label></div></article>)}</div>}
+            {sortedDecisions.length === 0 ? <p className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No decisions captured yet.</p> : <div className="mt-5 space-y-4">{sortedDecisions.map((decision) => <article className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={decision.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { title: event.target.value })} value={decision.title} /></label><label className="text-sm font-medium text-slate-700">Decision Maker<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionMaker: event.target.value })} value={decision.decisionMaker ?? ""} /></label><label className="text-sm font-medium text-slate-700">Decision Date<input className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionDate: event.target.value })} type="date" value={decision.decisionDate} /></label><label className="text-sm font-medium text-slate-700">Impact<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { impact: event.target.value as ImpactLevel })} value={decision.impact ?? "low"}>{impactLevels.map((impact) => <option key={impact} value={impact}>{statusLabel(impact)}</option>)}</select></label><button className="self-end rounded-2xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteDecision(decision)} type="button">Delete Decision</button><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Context<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { context: event.target.value })} value={decision.context ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Decision Text<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecision(decision.id, { decisionText: event.target.value })} value={decision.decisionText} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Evidence Links<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => updateDecisionEvidenceLinks(decision.id, event.target.value)} placeholder="One link per line" value={(decision.evidenceLinks ?? []).join("\n")} /></label></div></article>)}</div>}
           </section>
         )}
       </section>
@@ -925,14 +937,15 @@ export function ProjectFileWorkspace() {
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700">Local project file</p>
                   <h2 className="mt-1 text-2xl font-bold tracking-tight">{projectFile.project.name}</h2>
-                  <p className={`mt-1 text-sm font-semibold ${isDirty ? "text-amber-700" : "text-green-700"}`}>{isDirty ? "Unsaved changes" : "Saved"}</p>
+                  <p className={`mt-1 text-sm font-semibold ${isDirty ? "text-amber-700" : "text-green-700"}`}>{isDirty ? "Unsaved changes — save or Save As to keep them" : "Saved to current browser snapshot"}</p>
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-blue-300 hover:bg-blue-50" onClick={() => fileInputRef.current?.click()} type="button">Open</button>
-                  <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-blue-300 hover:bg-blue-50" onClick={() => saveProject(false)} type="button">Save</button>
+                  <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-blue-300 hover:bg-blue-50" onClick={() => saveProject(false)} type="button" aria-describedby="save-help">Save</button>
                   <button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800" onClick={() => saveProject(true)} type="button">Save As</button>
                   <input accept=".pmgov,application/json" className="hidden" onChange={openProject} ref={fileInputRef} type="file" />
                 </div>
+                <p id="save-help" className="text-xs text-slate-500">Save downloads a validated .pmgov file to your device; no cloud copy is kept.</p>
               </div>
             </header>
 
@@ -954,7 +967,7 @@ export function ProjectFileWorkspace() {
               <div className="mb-6 grid gap-4 md:grid-cols-3">
                 <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">File</p><p className="mt-3 text-lg font-bold">{openedFileName ?? "No file saved"}</p></div>
                 <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Validation</p><p className={`mt-3 text-lg font-bold ${validation?.success ? "text-green-700" : "text-red-700"}`}>{validation?.success ? "Schema valid" : "Schema invalid"}</p></div>
-                <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Records</p><p className="mt-3 text-lg font-bold">{countRecords(projectFile).reduce((total, [, count]) => total + count, 0)} governance items</p></div>
+                <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Records</p><p className="mt-3 text-lg font-bold">{countRecords(projectFile).reduce((total, [, count]) => total + count, 0)} total records</p><p className="mt-1 text-xs text-slate-500">{countRecords(projectFile).map(([label, count]) => `${label}: ${count}`).join(" · ")}</p></div>
               </div>
 
               {activeView === "Dashboard" ? (
