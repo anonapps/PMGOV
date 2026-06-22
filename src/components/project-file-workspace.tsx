@@ -9,10 +9,13 @@ import {
   calculateWorkstreamHealth,
   createEmptyProjectFile,
   createEmptyPortfolioProject,
+  deletePortfolioProject,
   projectWorkspaceToLegacyFile,
   parsePmgovJson,
   preparePmgovForSave,
   serializePmgovFile,
+  switchActiveProjectWorkspace,
+  syncActiveProjectToPortfolio,
   validatePmgovFile,
 } from "@/lib/pmgov";
 
@@ -366,7 +369,12 @@ export function ProjectFileWorkspace() {
     setOpenedFileName(selectedFile.name);
     setActiveView("Portfolio");
     setReportGeneratedAt(new Date().toISOString());
-    setMessage({ tone: "success", text: `${selectedFile.name} opened and validated locally.` });
+    setMessage({
+      tone: result.migratedFromLegacy ? "info" : "success",
+      text: result.migratedFromLegacy
+        ? "This project file was upgraded to the portfolio format in browser memory. Save the file to keep the upgraded structure."
+        : `${selectedFile.name} opened and validated locally.`,
+    });
   }
 
   function saveProject(saveAs = false) {
@@ -393,14 +401,11 @@ export function ProjectFileWorkspace() {
   }
 
   function syncActiveRoot(current: PmgovFile): PmgovFile {
-    const activeProject = { ...current.project, workstreams: current.workstreams, stages: current.stages, milestones: current.milestones, notes: current.notes, decisions: current.decisions, actions: current.actions, dependencies: current.dependencies, risks: current.risks, assumptions: current.assumptions, issues: current.issues, links: current.links, reports: current.reports };
-    return { ...current, projects: current.projects.map((project) => (project.id === current.activeProjectId ? activeProject : project)) };
+    return syncActiveProjectToPortfolio(current);
   }
 
   function loadProjectIntoRoot(current: PmgovFile, projectId: string): PmgovFile {
-    const synced = syncActiveRoot(current);
-    const project = synced.projects.find((item) => item.id === projectId) ?? synced.projects[0];
-    return { ...synced, ...projectWorkspaceToLegacyFile(synced, project), activeProjectId: project.id };
+    return switchActiveProjectWorkspace(current, projectId);
   }
 
   function updatePortfolio(patch: Partial<PmgovFile["portfolio"]>) {
@@ -413,7 +418,27 @@ export function ProjectFileWorkspace() {
 
   function addPortfolioProject() {
     const project = createEmptyPortfolioProject();
-    mutateProjectFile((current) => ({ ...loadProjectIntoRoot(syncActiveRoot(current), current.activeProjectId), projects: [...syncActiveRoot(current).projects, project] }), "Project added to portfolio.");
+    mutateProjectFile((current) => {
+      const synced = syncActiveRoot(current);
+      return { ...loadProjectIntoRoot(synced, synced.activeProjectId), projects: [...synced.projects, project] };
+    }, "Project added to portfolio.");
+  }
+
+  function removePortfolioProject(projectId: string) {
+    if (!projectFile) return;
+
+    if (projectFile.projects.length <= 1) {
+      setMessage({ tone: "error", text: "The last remaining project cannot be deleted." });
+      return;
+    }
+
+    const project = projectFile.projects.find((item) => item.id === projectId);
+    const label = project?.name || "this project";
+    if (!window.confirm(`Delete ${label} from this portfolio? This cannot be undone unless you reopen an unsaved copy.`)) {
+      return;
+    }
+
+    mutateProjectFile((current) => deletePortfolioProject(current, projectId), "Project deleted from portfolio.");
   }
 
   function mutateProjectFile(updater: (current: PmgovFile) => PmgovFile, successText: string) {
@@ -587,7 +612,7 @@ export function ProjectFileWorkspace() {
     return <div className="grid gap-6" id="portfolio">
       <section className="rounded-3xl border border-slate-200 bg-white p-6"><div className="flex items-start justify-between gap-4"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Portfolio Overview</p><h3 className="mt-2 text-2xl font-bold">{file.portfolio.name}</h3><p className="mt-2 text-sm text-slate-600">Manage multiple local projects inside one .pmgov portfolio file.</p></div><button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white" onClick={addPortfolioProject} type="button">Add project</button></div><div className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Portfolio Name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ name: event.target.value })} value={file.portfolio.name} /></label><label className="text-sm font-medium text-slate-700">Sponsor<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ sponsor: event.target.value })} value={file.portfolio.sponsor ?? ""} /></label><label className="text-sm font-medium text-slate-700">Portfolio Manager<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ portfolioManager: event.target.value })} value={file.portfolio.portfolioManager ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updatePortfolio({ description: event.target.value })} value={file.portfolio.description ?? ""} /></label></div></section>
       <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Portfolio Dashboard</h3><dl className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">{[["Total Projects", counts.total], ["Green Projects", counts.green], ["Amber Projects", counts.amber], ["Red Projects", counts.red], ["Open Risks", openRisks.length], ["Critical Issues", criticalIssues.length], ["Open Dependencies", openDependencies.length], ["Upcoming Milestones", upcomingMilestones.length]].map(([label, value]) => <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" key={label as string}><dt className="text-xs font-bold uppercase text-slate-500">{label}</dt><dd className="mt-2 text-2xl font-bold">{value}</dd></div>)}</dl><p className={`mt-4 inline-flex rounded-full border px-4 py-2 text-sm font-bold uppercase ${statusTone(portfolioHealth)}`}>Portfolio health: {statusLabel(portfolioHealth)}</p></section>
-      <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Projects List</h3><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[56rem] text-left text-sm"><thead><tr className="border-b text-xs uppercase text-slate-500"><th className="py-2">Project ID</th><th>Name</th><th>Sponsor</th><th>PM</th><th>Status</th><th>Start</th><th>Target</th></tr></thead><tbody>{projectRows.map(({ project, health }) => <tr className="border-b border-slate-100" key={project.id}><td className="py-3 font-mono text-xs">{project.id}</td><td><button className="font-semibold text-blue-700" onClick={() => switchActiveProject(project.id)} type="button">{project.name}</button><p className="text-xs text-slate-500">{project.description}</p></td><td>{project.sponsor || "Not set"}</td><td>{project.projectManager || "Not set"}</td><td><span className={`rounded-full border px-2 py-1 text-xs uppercase ${statusTone(health.status)}`}>{statusLabel(health.status)}</span></td><td>{project.startDate || "—"}</td><td>{project.targetDate || "—"}</td></tr>)}</tbody></table></div></section>
+      <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Projects List</h3><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[56rem] text-left text-sm"><thead><tr className="border-b text-xs uppercase text-slate-500"><th className="py-2">Project ID</th><th>Name</th><th>Sponsor</th><th>PM</th><th>Status</th><th>Start</th><th>Target</th><th>Actions</th></tr></thead><tbody>{projectRows.map(({ project, health }) => <tr className={`border-b border-slate-100 ${project.id === file.activeProjectId ? "bg-blue-50" : ""}`} key={project.id}><td className="py-3 font-mono text-xs">{project.id}</td><td><button className="font-semibold text-blue-700" onClick={() => switchActiveProject(project.id)} type="button">{project.name}</button>{project.id === file.activeProjectId ? <span className="ml-2 rounded-full bg-blue-100 px-2 py-1 text-xs font-bold uppercase text-blue-700">Active</span> : null}<p className="text-xs text-slate-500">{project.description}</p></td><td>{project.sponsor || "Not set"}</td><td>{project.projectManager || "Not set"}</td><td><span className={`rounded-full border px-2 py-1 text-xs uppercase ${statusTone(health.status)}`}>{statusLabel(health.status)}</span></td><td>{project.startDate || "—"}</td><td>{project.targetDate || "—"}</td><td><button className="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={synced.projects.length <= 1} onClick={() => removePortfolioProject(project.id)} type="button">Delete</button></td></tr>)}</tbody></table></div></section>
     </div>;
   }
 
@@ -1287,7 +1312,7 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
                 <select className="mt-3 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => switchActiveProject(event.target.value)} value={projectFile.activeProjectId}>
                   {projectFile.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select>
-                <p className="mt-2 text-sm text-slate-600">All project workspaces below use the selected project inside this local portfolio file.</p>
+                <p className="mt-2 text-sm text-slate-600">All project workspaces below use the selected project inside this local portfolio file. Switching projects saves the current in-memory edits into the portfolio before loading the next project.</p>
               </div>
 
               <div className="mb-6 grid gap-4 md:grid-cols-3">

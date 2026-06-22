@@ -12,6 +12,8 @@ import {
   getMilestoneAttentionReasons,
   parsePmgovJson,
   preparePmgovForSave,
+  deletePortfolioProject,
+  switchActiveProjectWorkspace,
   serializePmgovFile,
   validatePmgovFile,
 } from "../src/lib/pmgov";
@@ -142,4 +144,92 @@ test("portfolio files persist multiple project workspaces and executive reports"
   assert.match(report, /Vendor delay/);
   assert.match(report, /Production outage/);
   assert.match(report, /API contract/);
+});
+
+
+test("old single-project files migrate to one-project portfolios with all records", () => {
+  const file = fixture();
+  const legacy = JSON.parse(serializePmgovFile(file));
+  delete legacy.portfolio;
+  delete legacy.activeProjectId;
+  delete legacy.projects;
+
+  const parsed = validatePmgovFile(legacy);
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.migratedFromLegacy, true);
+    assert.equal(parsed.data.projects.length, 1);
+    assert.equal(parsed.data.activeProjectId, legacy.project.id);
+    assert.equal(parsed.data.project.name, "QA Project");
+    assert.equal(parsed.data.workstreams.length, 1);
+    assert.equal(parsed.data.stages.length, 1);
+    assert.equal(parsed.data.milestones.length, 1);
+    assert.equal(parsed.data.notes.length, 0);
+    assert.equal(parsed.data.actions.length, 1);
+    assert.equal(parsed.data.decisions.length, 1);
+    assert.equal(parsed.data.dependencies.length, 1);
+    assert.equal(parsed.data.risks.length, 1);
+    assert.equal(parsed.data.assumptions.length, 1);
+    assert.equal(parsed.data.issues.length, 1);
+  }
+});
+
+test("save upgraded file and reopen portfolio format without migration", () => {
+  const legacy = JSON.parse(serializePmgovFile(fixture()));
+  delete legacy.portfolio;
+  delete legacy.activeProjectId;
+  delete legacy.projects;
+
+  const migrated = validatePmgovFile(legacy);
+  assert.equal(migrated.success, true);
+  if (migrated.success) {
+    const saved = serializePmgovFile(preparePmgovForSave(migrated.data));
+    const reopened = parsePmgovJson(saved);
+    assert.equal(reopened.success, true);
+    if (reopened.success) {
+      assert.equal(reopened.migratedFromLegacy, false);
+      assert.equal(reopened.data.projects.length, 1);
+      assert.equal(reopened.data.projects[0].workstreams[0].name, "Delivery");
+      assert.equal(reopened.data.projects[0].risks[0].title, "Vendor delay");
+    }
+  }
+});
+
+test("multiple projects remain isolated and project switching preserves data", () => {
+  const file = fixture();
+  const firstId = file.activeProjectId;
+  const second = structuredClone(file.projects[0]);
+  second.id = "project-2";
+  second.name = "Second Project";
+  second.workstreams = [{ id: "ws-2", name: "Second Delivery", status: "green", sortOrder: 1 }];
+  second.stages = [];
+  second.milestones = [];
+  second.actions = [];
+  second.decisions = [];
+  second.dependencies = [];
+  second.risks = [];
+  second.assumptions = [];
+  second.issues = [];
+  file.projects.push(second);
+
+  file.project.name = "First Project Edited";
+  file.workstreams[0].name = "First Delivery Edited";
+  const onSecond = switchActiveProjectWorkspace(file, "project-2");
+  assert.equal(onSecond.project.name, "Second Project");
+  assert.equal(onSecond.workstreams[0].name, "Second Delivery");
+
+  onSecond.project.name = "Second Project Edited";
+  onSecond.workstreams[0].name = "Second Delivery Edited";
+  const backOnFirst = switchActiveProjectWorkspace(onSecond, firstId);
+  assert.equal(backOnFirst.project.name, "First Project Edited");
+  assert.equal(backOnFirst.workstreams[0].name, "First Delivery Edited");
+
+  const saved = preparePmgovForSave(backOnFirst);
+  assert.equal(saved.projects.find((project) => project.id === firstId)?.workstreams[0].name, "First Delivery Edited");
+  assert.equal(saved.projects.find((project) => project.id === "project-2")?.workstreams[0].name, "Second Delivery Edited");
+});
+
+test("last project cannot be deleted", () => {
+  const file = fixture();
+  assert.throws(() => deletePortfolioProject(file, file.activeProjectId), /last remaining project cannot be deleted/i);
 });

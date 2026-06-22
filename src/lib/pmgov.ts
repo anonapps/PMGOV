@@ -72,7 +72,7 @@ export const pmgovFileSchema = z.object({
 });
 
 export type ValidationResult =
-  | { success: true; data: PmgovFile }
+  | { success: true; data: PmgovFile; migratedFromLegacy: boolean }
   | { success: false; error: string };
 
 function emptyPortfolioProject(): PortfolioProject {
@@ -105,7 +105,34 @@ export function getActiveProjectFile(file: PmgovFile): LegacyPmgovFile {
 
 export function replaceActiveProjectFromFile(file: PmgovFile, activeFile: LegacyPmgovFile): PmgovFile {
   const project: PortfolioProject = { ...activeFile.project, workstreams: activeFile.workstreams, stages: activeFile.stages, milestones: activeFile.milestones, notes: activeFile.notes, decisions: activeFile.decisions, actions: activeFile.actions, dependencies: activeFile.dependencies, risks: activeFile.risks, assumptions: activeFile.assumptions, issues: activeFile.issues, links: activeFile.links, reports: activeFile.reports };
-  return { ...file, activeProjectId: project.id, projects: file.projects.map((item) => (item.id === project.id ? project : item)) };
+  const existingIndex = file.projects.findIndex((item) => item.id === project.id);
+  const projects = existingIndex >= 0 ? file.projects.map((item) => (item.id === project.id ? project : item)) : [...file.projects, project];
+  return { ...file, ...activeFile, activeProjectId: project.id, projects };
+}
+
+export function syncActiveProjectToPortfolio(file: PmgovFile): PmgovFile {
+  return replaceActiveProjectFromFile(file, getActiveProjectFile(file));
+}
+
+export function switchActiveProjectWorkspace(file: PmgovFile, projectId: string): PmgovFile {
+  const synced = syncActiveProjectToPortfolio(file);
+  const project = synced.projects.find((item) => item.id === projectId) ?? synced.projects[0];
+  return { ...synced, ...projectWorkspaceToLegacyFile(synced, project), activeProjectId: project.id };
+}
+
+export function deletePortfolioProject(file: PmgovFile, projectId: string): PmgovFile {
+  const synced = syncActiveProjectToPortfolio(file);
+  if (synced.projects.length <= 1) {
+    throw new Error("The last remaining project cannot be deleted.");
+  }
+
+  const remainingProjects = synced.projects.filter((project) => project.id !== projectId);
+  if (remainingProjects.length === synced.projects.length) {
+    return synced;
+  }
+
+  const nextActiveProjectId = synced.activeProjectId === projectId ? remainingProjects[0].id : synced.activeProjectId;
+  return switchActiveProjectWorkspace({ ...synced, projects: remainingProjects, activeProjectId: nextActiveProjectId }, nextActiveProjectId);
 }
 
 export function legacyFileToPortfolio(file: LegacyPmgovFile): PmgovFile {
@@ -139,10 +166,10 @@ export function createEmptyPortfolioProject(): PortfolioProject {
 
 export function validatePmgovFile(value: unknown): ValidationResult {
   const result = pmgovFileSchema.safeParse(value);
-  if (result.success) return { success: true, data: result.data };
+  if (result.success) return { success: true, data: switchActiveProjectWorkspace(result.data, result.data.activeProjectId), migratedFromLegacy: false };
 
   const legacyResult = legacyPmgovFileSchema.safeParse(value);
-  if (legacyResult.success) return { success: true, data: legacyFileToPortfolio(legacyResult.data) };
+  if (legacyResult.success) return { success: true, data: legacyFileToPortfolio(legacyResult.data), migratedFromLegacy: true };
 
   const message = result.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "file"}: ${issue.message}`).join("; ");
   return { success: false, error: `Invalid .pmgov file. ${message}` };
@@ -157,10 +184,9 @@ export function parsePmgovJson(text: string): ValidationResult {
 }
 
 export function preparePmgovForSave(file: PmgovFile): PmgovFile {
-  const activeProject: PortfolioProject = { ...file.project, workstreams: file.workstreams, stages: file.stages, milestones: file.milestones, notes: file.notes, decisions: file.decisions, actions: file.actions, dependencies: file.dependencies, risks: file.risks, assumptions: file.assumptions, issues: file.issues, links: file.links, reports: file.reports };
+  const syncedFile = syncActiveProjectToPortfolio(file);
   return {
-    ...file,
-    projects: file.projects.map((project) => (project.id === file.activeProjectId ? activeProject : project)),
+    ...syncedFile,
     fileMetadata: {
       ...file.fileMetadata,
       updatedAt: new Date().toISOString(),
