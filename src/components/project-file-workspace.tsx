@@ -19,7 +19,7 @@ import {
   validatePmgovFile,
 } from "@/lib/pmgov";
 
-const navigationItems = ["Portfolio", "Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Dependencies", "RAID", "Reports", "Settings"] as const;
+const navigationItems = ["Portfolio", "Portfolio Roadmap", "Dashboard", "Workstreams", "Timeline", "Notebook", "Governance", "Dependencies", "RAID", "Reports", "Settings"] as const;
 const healthModes: HealthMode[] = ["auto", "manual"];
 const workstreamStatuses: WorkstreamStatus[] = ["not_set", "green", "amber", "red", "complete"];
 const stageStatuses: StageStatus[] = ["not_started", "in_progress", "complete", "blocked"];
@@ -40,6 +40,10 @@ type NavigationItem = (typeof navigationItems)[number];
 type Message = { tone: "success" | "error" | "info"; text: string };
 type DueWindowFilter = (typeof dueWindowOptions)[number];
 type TimelineSortOption = (typeof timelineSortOptions)[number];
+type RoadmapWindow = "30" | "90" | "180" | "365";
+type RoadmapScale = "weekly" | "monthly";
+type RoadmapGroupBy = "project" | "workstream";
+type RoadmapSelection = { type: "milestone"; projectId: string; milestoneId: string } | { type: "dependency"; projectId: string; dependencyId: string } | { type: "project"; projectId: string };
 
 type TimelineMilestone = {
   milestone: Milestone;
@@ -344,6 +348,12 @@ export function ProjectFileWorkspace() {
   const [timelineWorkstreamFilter, setTimelineWorkstreamFilter] = useState<string>("all");
   const [timelineDueWindowFilter, setTimelineDueWindowFilter] = useState<DueWindowFilter>("All");
   const [timelineSortOption, setTimelineSortOption] = useState<TimelineSortOption>("Planned Date");
+  const [roadmapWindow, setRoadmapWindow] = useState<RoadmapWindow>("90");
+  const [roadmapScale, setRoadmapScale] = useState<RoadmapScale>("monthly");
+  const [roadmapGroupBy, setRoadmapGroupBy] = useState<RoadmapGroupBy>("project");
+  const [roadmapStatusFilter, setRoadmapStatusFilter] = useState<MilestoneStatus | "all">("all");
+  const [roadmapShowDependencies, setRoadmapShowDependencies] = useState(true);
+  const [roadmapSelection, setRoadmapSelection] = useState<RoadmapSelection | null>(null);
   const [dependencyStatusFilter, setDependencyStatusFilter] = useState<DependencyStatus | "all">("all");
   const [dependencyWorkstreamFilter, setDependencyWorkstreamFilter] = useState("all");
   const [dependencySearchQuery, setDependencySearchQuery] = useState("");
@@ -661,6 +671,75 @@ export function ProjectFileWorkspace() {
       <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Portfolio Dashboard</h3><dl className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">{[["Total Projects", counts.total], ["Green Projects", counts.green], ["Amber Projects", counts.amber], ["Red Projects", counts.red], ["Open Risks", openRisks.length], ["Critical Issues", criticalIssues.length], ["Open Dependencies", openDependencies.length], ["Upcoming Milestones", upcomingMilestones.length]].map(([label, value]) => <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" key={label as string}><dt className="text-xs font-bold uppercase text-slate-500">{label}</dt><dd className="mt-2 text-2xl font-bold">{value}</dd></div>)}</dl><p className={`mt-4 inline-flex rounded-full border px-4 py-2 text-sm font-bold uppercase ${statusTone(portfolioHealth)}`}>Portfolio health: {statusLabel(portfolioHealth)}</p></section>
       <section className="rounded-3xl border border-slate-200 bg-white p-6"><h3 className="text-xl font-bold">Projects List</h3><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[56rem] text-left text-sm"><thead><tr className="border-b text-xs uppercase text-slate-500"><th className="py-2">Project ID</th><th>Name</th><th>Sponsor</th><th>PM</th><th>Status</th><th>Start</th><th>Target</th><th>Actions</th></tr></thead><tbody>{projectRows.map(({ project, health }) => <tr className={`border-b border-slate-100 ${project.id === file.activeProjectId ? "bg-blue-50" : ""}`} key={project.id}><td className="py-3 font-mono text-xs">{project.id}</td><td><button className="font-semibold text-blue-700" onClick={() => switchActiveProject(project.id)} type="button">{project.name}</button>{project.id === file.activeProjectId ? <span className="ml-2 rounded-full bg-blue-100 px-2 py-1 text-xs font-bold uppercase text-blue-700">Active</span> : null}<p className="text-xs text-slate-500">{project.description}</p></td><td>{project.sponsor || "Not set"}</td><td>{project.projectManager || "Not set"}</td><td><span className={`rounded-full border px-2 py-1 text-xs uppercase ${statusTone(health.status)}`}>{statusLabel(health.status)}</span></td><td>{project.startDate || "—"}</td><td>{project.targetDate || "—"}</td><td><button className="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50" disabled={synced.projects.length <= 1} onClick={() => removePortfolioProject(project.id)} type="button">Delete</button></td></tr>)}</tbody></table></div></section>
     </div>;
+  }
+
+
+  function renderPortfolioRoadmapWorkspace(file: PmgovFile) {
+    const synced = syncActiveRoot(file);
+    const today = todayIsoDate();
+    const windowDays = Number(roadmapWindow);
+    const rangeStart = new Date(`${today}T00:00:00Z`);
+    const rangeEnd = new Date(rangeStart);
+    rangeEnd.setUTCDate(rangeStart.getUTCDate() + windowDays);
+    const rangeStartMs = rangeStart.getTime();
+    const rangeMs = Math.max(rangeEnd.getTime() - rangeStartMs, 1);
+    const clampPercent = (date?: string) => {
+      if (!date) return 0;
+      const value = new Date(`${date}T00:00:00Z`).getTime();
+      if (Number.isNaN(value)) return 0;
+      return Math.min(100, Math.max(0, ((value - rangeStartMs) / rangeMs) * 100));
+    };
+    const inWindow = (date?: string) => {
+      const days = daysBetween(today, date);
+      return days !== null && days >= 0 && days <= windowDays;
+    };
+    const allMilestones = synced.projects.flatMap((project) => project.milestones.map((milestone) => {
+      const stage = project.stages.find((item) => item.id === milestone.stageId);
+      const workstream = stage ? project.workstreams.find((item) => item.id === stage.workstreamId) : undefined;
+      const daysUntil = daysBetween(today, milestone.forecastDate || milestone.plannedDate);
+      const isOverdue = milestone.status !== "complete" && daysUntil !== null && daysUntil < 0;
+      return { project, milestone, stage, workstream, daysUntil, isOverdue };
+    }));
+    const visibleMilestones = allMilestones.filter((item) => roadmapStatusFilter === "all" || item.milestone.status === roadmapStatusFilter).filter((item) => item.isOverdue || inWindow(item.milestone.forecastDate || item.milestone.plannedDate));
+    const openDependencies = synced.projects.flatMap((project) => project.dependencies.map((dependency) => ({ project, dependency }))).filter(({ dependency }) => dependency.status !== "resolved");
+    const completedMilestones = allMilestones.filter((item) => item.milestone.status === "complete").length;
+    const atRisk = allMilestones.filter((item) => item.milestone.status === "amber").length + openDependencies.filter(({ dependency }) => dependency.status === "blocked").length;
+    const overdue = allMilestones.filter((item) => item.isOverdue).length;
+    const upcoming30 = allMilestones.filter((item) => item.milestone.status !== "complete" && inWindow(item.milestone.forecastDate || item.milestone.plannedDate) && (item.daysUntil ?? 999) <= 30).length;
+    const activeProjects = synced.projects.filter((project) => calculateProjectHealth({ ...synced, ...project, project }, today).status !== "green" || project.milestones.some((milestone) => milestone.status !== "complete")).length;
+    const headerCount = roadmapScale === "weekly" ? Math.min(Math.ceil(windowDays / 7), 26) : Math.min(Math.ceil(windowDays / 30), 12);
+    const headers = Array.from({ length: headerCount }, (_, index) => {
+      const date = new Date(rangeStart);
+      date.setUTCDate(date.getUTCDate() + (roadmapScale === "weekly" ? index * 7 : index * 30));
+      return roadmapScale === "weekly" ? `Wk ${index + 1}` : date.toLocaleString("en", { month: "short" });
+    });
+    const groups = roadmapGroupBy === "project"
+      ? synced.projects.map((project) => ({ id: project.id, label: project.name, sublabel: project.projectManager || "Project manager not set", project, items: visibleMilestones.filter((item) => item.project.id === project.id) }))
+      : Array.from(new Map(synced.projects.flatMap((project) => project.workstreams.map((workstream) => [workstream.id, { workstream, project }]))).values()).map(({ workstream, project }) => ({ id: workstream.id, label: workstream.name, sublabel: project.name, project, items: visibleMilestones.filter((item) => item.workstream?.id === workstream.id) }));
+    const selected = roadmapSelection?.type === "milestone" ? allMilestones.find((item) => item.project.id === roadmapSelection.projectId && item.milestone.id === roadmapSelection.milestoneId) : roadmapSelection?.type === "dependency" ? openDependencies.find((item) => item.project.id === roadmapSelection.projectId && item.dependency.id === roadmapSelection.dependencyId) : roadmapSelection?.type === "project" ? synced.projects.find((project) => project.id === roadmapSelection.projectId) : undefined;
+    const attentionProjects = synced.projects.filter((project) => project.milestones.some((milestone) => milestone.status === "red" || milestone.status === "amber" || (milestone.status !== "complete" && (daysBetween(today, milestone.forecastDate || milestone.plannedDate) ?? 0) < 0)) || project.dependencies.some((dependency) => dependency.status === "blocked"));
+    const milestoneTone = (item: typeof visibleMilestones[number]) => item.milestone.status === "complete" ? "bg-slate-400 border-slate-500" : item.isOverdue || item.milestone.status === "red" ? "bg-red-600 border-red-700" : item.milestone.status === "amber" ? "bg-amber-500 border-amber-600" : "bg-emerald-600 border-emerald-700";
+
+    return (
+      <section className="space-y-6" id="portfolio-roadmap">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Strategic portfolio timeline</p><h3 className="mt-2 text-3xl font-bold tracking-tight">Portfolio Roadmap</h3><p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">Strategic view of all projects, milestones and dependencies across the portfolio.</p></div><div className="flex flex-wrap gap-2"><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" type="button">Export</button><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-blue-300 hover:bg-blue-50" type="button">Filters</button>{file.stages[0] ? <button className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-800" onClick={() => addMilestone(file.stages[0].id)} type="button">Add Milestone</button> : null}</div></div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">{[["Active Projects", activeProjects, "text-blue-700"], ["Total Milestones", allMilestones.length, "text-slate-900"], ["Completed Milestones", completedMilestones, "text-emerald-700"], ["At Risk", atRisk, "text-amber-700"], ["Overdue", overdue, "text-red-700"], ["Upcoming 30 Days", upcoming30, "text-purple-700"]].map(([label, value, tone]) => <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm" key={label as string}><p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">{label}</p><p className={`mt-3 text-3xl font-black ${tone}`}>{value}</p></article>)}</div>
+        <div className="grid gap-4 rounded-3xl border border-slate-200 bg-white p-5 md:grid-cols-2 xl:grid-cols-5">
+          <label className="text-sm font-medium text-slate-700">View window<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" value={roadmapWindow} onChange={(e) => setRoadmapWindow(e.target.value as RoadmapWindow)}><option value="30">Next 30 Days</option><option value="90">Next 90 Days</option><option value="180">Next 180 Days</option><option value="365">Full Year</option></select></label>
+          <label className="text-sm font-medium text-slate-700">Timeline scale<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" value={roadmapScale} onChange={(e) => setRoadmapScale(e.target.value as RoadmapScale)}><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label>
+          <label className="text-sm font-medium text-slate-700">Group by<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" value={roadmapGroupBy} onChange={(e) => setRoadmapGroupBy(e.target.value as RoadmapGroupBy)}><option value="project">Project</option><option value="workstream">Workstream</option></select></label>
+          <label className="text-sm font-medium text-slate-700">Status filter<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" value={roadmapStatusFilter} onChange={(e) => setRoadmapStatusFilter(e.target.value as MilestoneStatus | "all")}><option value="all">All statuses</option>{milestoneStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label>
+          <label className="flex items-end gap-3 text-sm font-bold text-slate-700"><input checked={roadmapShowDependencies} className="h-5 w-5 accent-blue-700" onChange={(e) => setRoadmapShowDependencies(e.target.checked)} type="checkbox" />Show Dependencies</label>
+        </div>
+        <div className="grid gap-6 xl:grid-cols-[1fr_22rem]">
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"><div className="grid border-b border-slate-200 bg-slate-50" style={{ gridTemplateColumns: `16rem repeat(${headers.length}, minmax(5rem, 1fr))` }}><div className="px-4 py-3 text-xs font-black uppercase tracking-[0.18em] text-slate-500">Swimlane</div>{headers.map((header) => <div className="border-l border-slate-200 px-3 py-3 text-center text-xs font-bold uppercase text-slate-500" key={header}>{header}</div>)}</div><div className="divide-y divide-slate-100">{groups.map((group) => <div className="grid min-h-24" key={group.id} style={{ gridTemplateColumns: `16rem 1fr` }}><button className="bg-white px-4 py-4 text-left hover:bg-blue-50" onClick={() => setRoadmapSelection({ type: "project", projectId: group.project.id })} type="button"><p className="font-bold text-slate-950">{group.label}</p><p className="mt-1 text-xs text-slate-500">{group.sublabel}</p></button><div className="relative bg-[linear-gradient(to_right,#e2e8f0_1px,transparent_1px)] p-4" style={{ backgroundSize: `${100 / headers.length}% 100%` }}><div className="absolute bottom-0 top-0 w-0.5 bg-blue-600/70" style={{ left: `${clampPercent(today)}%` }} title="Today" />{group.items.map((item, index) => <button className={`absolute h-4 w-4 -translate-x-1/2 rotate-45 rounded-[0.2rem] border ${milestoneTone(item)} shadow-sm ring-2 ring-white`} key={item.milestone.id} onClick={() => setRoadmapSelection({ type: "milestone", projectId: item.project.id, milestoneId: item.milestone.id })} style={{ left: `${clampPercent(item.milestone.forecastDate || item.milestone.plannedDate)}%`, top: `${1 + (index % 4) * 1.15}rem` }} title={item.milestone.name}><span className="sr-only">{item.milestone.name}</span></button>)}{roadmapShowDependencies ? openDependencies.filter(({ project }) => project.id === group.project.id).slice(0, 3).map(({ dependency }, index) => <button className="absolute bottom-2 rounded-full border border-slate-300 bg-slate-100 px-2 py-1 text-[0.65rem] font-bold text-slate-600 hover:border-blue-300" key={dependency.id} onClick={() => setRoadmapSelection({ type: "dependency", projectId: group.project.id, dependencyId: dependency.id })} style={{ left: `${Math.min(88, 4 + index * 28)}%` }} type="button">↔ {dependency.title}</button>) : null}</div></div>)}</div></div>
+          <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Detail panel</p>{!selected ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">Select a project, milestone or dependency to view details.</p> : "milestone" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.milestone.name}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Workstream:</strong> {selected.workstream?.name ?? "Unassigned"}</p><p><strong>Stage:</strong> {selected.stage?.name ?? "Unassigned"}</p><p><strong>Date:</strong> {selected.milestone.forecastDate || selected.milestone.plannedDate}</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(selected.milestone.status)}`}>{statusLabel(selected.milestone.status)}</span></p><p><strong>Owner:</strong> {selected.project.projectManager || "Project Manager"}</p><p className="whitespace-pre-wrap"><strong>Commentary:</strong> {selected.milestone.commentary || selected.milestone.description || "No commentary captured."}</p>{renderRelatedGovernance(file, "milestone", selected.milestone.id)}</div> : "dependency" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.dependency.title}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Date:</strong> {selected.dependency.dueDate}</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(ragFromDependency(selected.dependency, today))}`}>{statusLabel(selected.dependency.status)}</span></p><p><strong>Owner:</strong> {selected.dependency.owner || "Unassigned"}</p><p>{selected.dependency.description || selected.dependency.commentary || "No dependency commentary captured."}</p></div> : <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.name}</h4><p><strong>Project:</strong> {selected.name}</p><p><strong>Owner:</strong> {selected.projectManager || "Project Manager not set"}</p><p><strong>Stage:</strong> Portfolio project</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(selected.status)}`}>{statusLabel(selected.status)}</span></p><p>{selected.description || "No project description captured."}</p></div>}</aside>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Portfolio Health</h4><p className="mt-2 text-sm text-slate-600">{overdue > 0 ? "Red: overdue milestones require executive attention." : atRisk > 0 ? "Amber: at-risk milestones or blocked dependencies present." : "Green: no major roadmap exceptions detected."}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Projects Requiring Attention</h4><p className="mt-2 text-3xl font-black text-amber-700">{attentionProjects.length}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Upcoming Milestones</h4><p className="mt-2 text-sm text-slate-600">{visibleMilestones.slice(0, 4).map((item) => item.milestone.name).join(" · ") || "No milestones in view."}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Legend</h4><div className="mt-3 grid gap-2 text-xs font-bold text-slate-600"><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-emerald-600" />On track</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-amber-500" />At risk</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-red-600" />Overdue/problem</span><span><i className="mr-2 inline-block h-3 w-3 rotate-45 bg-purple-600" />Milestone marker</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-slate-300" />Dependency</span></div></article></div>
+      </section>
+    );
   }
 
   function renderDashboard(file: PmgovFile) {
@@ -1217,6 +1296,7 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
   function renderPlaceholder(view: NavigationItem) {
     const descriptions: Record<NavigationItem, string> = {
       Portfolio: "Portfolio overview, projects list, and portfolio dashboard are available here.",
+      "Portfolio Roadmap": "Strategic portfolio timeline across projects, milestones, workstreams, and dependencies.",
       Dashboard: "Milestones requiring attention, upcoming milestones, workstream health, open actions, recent decisions, and the executive summary will appear here.",
       Workstreams: "Manage workstream lists, stages, and milestones grouped by stage here in a later task.",
       Timeline: "A roadmap-style timeline grouped by workstream and stage will appear here.",
@@ -1266,15 +1346,15 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
         </section>
       ) : (
         <div className="flex min-h-screen">
-          <aside className="hidden w-72 shrink-0 border-r border-slate-200 bg-white p-5 shadow-sm lg:block">
+          <aside className="hidden w-72 shrink-0 border-r border-slate-800 bg-slate-950 p-5 text-white shadow-xl lg:block">
             <div className="mb-8">
-              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-blue-700">PGW</p>
-              <h1 className="mt-2 text-2xl font-bold">Project Governance Workspace</h1>
+              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-blue-300">PGW</p>
+              <h1 className="mt-2 text-2xl font-bold text-white">Project Governance Workspace</h1>
             </div>
             <nav aria-label="Project workspace sections" className="space-y-2">
               {navigationItems.map((item) => (
                 <button
-                  className={`block w-full rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${activeView === item ? "bg-blue-700 text-white" : "text-slate-700 hover:bg-blue-50 hover:text-blue-700"}`}
+                  className={`block w-full rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${activeView === item ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
                   key={item}
                   onClick={() => setActiveView(item)}
                   type="button"
@@ -1334,6 +1414,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
 
               {activeView === "Portfolio" ? (
                 renderPortfolioWorkspace(projectFile)
+              ) : activeView === "Portfolio Roadmap" ? (
+                renderPortfolioRoadmapWorkspace(projectFile)
               ) : activeView === "Dashboard" ? (
                 renderDashboard(projectFile)
               ) : activeView === "Workstreams" ? (
