@@ -243,8 +243,26 @@ function statusLabel(status: string) {
   return status.replaceAll("_", " ");
 }
 
+function nextDefaultName(items: string[], prefix: string) {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`^${escaped}(\\d+)$`, "i");
+  const used = new Set(items.map((item) => item.trim().toLowerCase()));
+  let highest = 0;
+  for (const item of items) {
+    const match = item.trim().match(pattern);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  }
+  let next = highest + 1;
+  while (used.has(`${prefix}${next}`.toLowerCase())) next += 1;
+  return `${prefix}${next}`;
+}
+
+function focusRecord(id: string) {
+  window.setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+}
+
 function nextSortOrder(items: { sortOrder: number }[]) {
-  return items.reduce((highest, item) => Math.max(highest, item.sortOrder), 0) + 1;
+  return items.reduce((lowest, item) => Math.min(lowest, item.sortOrder), 0) - 1;
 }
 
 function countRecords(file: PmgovFile) {
@@ -354,6 +372,7 @@ export function ProjectFileWorkspace() {
   const [roadmapStatusFilter, setRoadmapStatusFilter] = useState<MilestoneStatus | "all">("all");
   const [roadmapShowDependencies, setRoadmapShowDependencies] = useState(true);
   const [roadmapSelection, setRoadmapSelection] = useState<RoadmapSelection | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [dependencyStatusFilter, setDependencyStatusFilter] = useState<DependencyStatus | "all">("all");
   const [dependencyWorkstreamFilter, setDependencyWorkstreamFilter] = useState("all");
   const [dependencySearchQuery, setDependencySearchQuery] = useState("");
@@ -362,7 +381,7 @@ export function ProjectFileWorkspace() {
   const [reportGeneratedAt, setReportGeneratedAt] = useState<string>(() => new Date().toISOString());
   const [message, setMessage] = useState<Message>({
     tone: "info",
-    text: "Create a new local project file or open an existing .pmgov file to begin.",
+    text: "Open or create a local .pmgov file to manage your project in browser memory.",
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -466,10 +485,10 @@ export function ProjectFileWorkspace() {
   }
 
   function addPortfolioProject() {
-    const project = createEmptyPortfolioProject();
+    const project = { ...createEmptyPortfolioProject(), name: nextDefaultName(projectFile?.projects.map((item) => item.name) ?? [], "New project") };
     mutateProjectFile((current) => {
       const synced = syncActiveRoot(current);
-      return { ...loadProjectIntoRoot(synced, synced.activeProjectId), projects: [...synced.projects, project] };
+      return { ...loadProjectIntoRoot(synced, synced.activeProjectId), projects: [project, ...synced.projects] };
     }, "Project added to portfolio.");
   }
 
@@ -516,7 +535,7 @@ export function ProjectFileWorkspace() {
   function addWorkstream() {
     const workstream: Workstream = {
       id: crypto.randomUUID(),
-      name: "New workstream",
+      name: nextDefaultName(projectFile?.workstreams.map((item) => item.name) ?? [], "New workstream"),
       description: "",
       status: "not_set",
       healthMode: "auto",
@@ -524,7 +543,8 @@ export function ProjectFileWorkspace() {
       sortOrder: nextSortOrder(projectFile?.workstreams ?? []),
     };
 
-    mutateProjectFile((current) => ({ ...current, workstreams: [...current.workstreams, workstream] }), "Workstream added.");
+    mutateProjectFile((current) => ({ ...current, workstreams: [workstream, ...current.workstreams] }), "Workstream added.");
+    focusRecord(`workstream-${workstream.id}`);
   }
 
   function updateWorkstream(id: string, patch: Partial<Workstream>) {
@@ -553,8 +573,9 @@ export function ProjectFileWorkspace() {
 
   function addStage(workstreamId: string) {
     const stagesForWorkstream = projectFile?.stages.filter((stage) => stage.workstreamId === workstreamId) ?? [];
-    const stage: Stage = { id: crypto.randomUUID(), workstreamId, name: "New stage", status: "not_started", commentary: "", sortOrder: nextSortOrder(stagesForWorkstream) };
-    mutateProjectFile((current) => ({ ...current, stages: [...current.stages, stage] }), "Stage added.");
+    const stage: Stage = { id: crypto.randomUUID(), workstreamId, name: nextDefaultName(stagesForWorkstream.map((item) => item.name), "New stage"), status: "not_started", commentary: "", sortOrder: nextSortOrder(stagesForWorkstream) };
+    mutateProjectFile((current) => ({ ...current, stages: [stage, ...current.stages] }), "Stage added.");
+    focusRecord(`stage-${stage.id}`);
   }
 
   function updateStage(id: string, patch: Partial<Stage>) {
@@ -575,8 +596,10 @@ export function ProjectFileWorkspace() {
   }
 
   function addMilestone(stageId: string) {
-    const milestone: Milestone = { id: crypto.randomUUID(), stageId, name: "New milestone", description: "", plannedDate: todayIsoDate(), status: "not_set", commentary: "" };
-    mutateProjectFile((current) => ({ ...current, milestones: [...current.milestones, milestone] }), "Milestone added.");
+    const milestone: Milestone = { id: crypto.randomUUID(), stageId, name: nextDefaultName(projectFile?.milestones.map((item) => item.name) ?? [], "New milestone"), description: "", plannedDate: todayIsoDate(), status: "not_set", commentary: "" };
+    mutateProjectFile((current) => ({ ...current, milestones: [milestone, ...current.milestones] }), "Milestone added.");
+    setRoadmapSelection({ type: "milestone", projectId: projectFile?.activeProjectId ?? "", milestoneId: milestone.id });
+    focusRecord(`milestone-${milestone.id}`);
   }
 
   function updateMilestone(id: string, patch: Partial<Milestone>) {
@@ -640,7 +663,7 @@ export function ProjectFileWorkspace() {
                 <div className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Name <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { name: event.target.value })} value={workstream.name} /></label><label className="text-sm font-medium text-slate-700">Health mode<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { healthMode: event.target.value as HealthMode })} value={workstream.healthMode ?? "auto"}>{healthModes.map((mode) => (<option key={mode} value={mode}>{statusLabel(mode)}</option>))}</select></label><label className="text-sm font-medium text-slate-700">Manual override<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" disabled={(workstream.healthMode ?? "auto") === "auto"} onChange={(event) => updateWorkstream(workstream.id, { status: event.target.value as WorkstreamStatus })} value={workstream.status}>{workstreamStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm md:col-span-2"><p className="font-bold text-slate-900">Calculated health: <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${statusTone(calculatedHealth.status)}`}>{statusLabel(calculatedHealth.status)}</span></p><p className="mt-1 font-semibold text-slate-700">Mode: {statusLabel(calculatedHealth.mode)}{calculatedHealth.mode === "manual" ? ` override (auto would be ${statusLabel(calculatedHealth.calculatedStatus)})` : ""}</p><ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">{calculatedHealth.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></div><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { description: event.target.value })} value={workstream.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-20 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateWorkstream(workstream.id, { commentary: event.target.value })} value={workstream.commentary ?? ""} /></label></div>{renderRelatedGovernance(file, "workstream", workstream.id)}
                 <div className="mt-6 space-y-4">{stages.length === 0 ? (<p className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">No stages yet. Add a stage for this workstream.</p>) : stages.map((stage) => {
                   const milestones = file.milestones.filter((milestone) => milestone.stageId === stage.id);
-                  return (<div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={stage.id}><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div className="grid flex-1 gap-3 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Stage name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { name: event.target.value })} value={stage.name} /></label><label className="text-sm font-medium text-slate-700">Stage status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { status: event.target.value as StageStatus })} value={stage.status ?? "not_started"}>{stageStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Stage commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { commentary: event.target.value })} value={stage.commentary ?? ""} /></label></div><div className="flex gap-2"><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={() => addMilestone(stage.id)} type="button">Add milestone</button><button className="rounded-2xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" onClick={() => deleteStage(stage)} type="button">Delete</button></div></div>{renderRelatedGovernance(file, "stage", stage.id)}<div className="mt-4 space-y-3">{milestones.length === 0 ? (<p className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No milestones yet for this stage.</p>) : milestones.map((milestone) => (<div className="rounded-2xl border border-slate-200 bg-white p-4" key={milestone.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Milestone name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { name: event.target.value })} value={milestone.name} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { status: event.target.value as MilestoneStatus })} value={milestone.status}>{milestoneStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><div className="rounded-2xl bg-slate-100 p-3 text-sm"><span className="font-semibold text-slate-500">Variance</span><span className="mt-1 block font-bold text-slate-900">{formatVariance(milestone)}</span></div><label className="text-sm font-medium text-slate-700">Planned date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { plannedDate: event.target.value })} type="date" value={milestone.plannedDate} /></label><label className="text-sm font-medium text-slate-700">Forecast date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { forecastDate: optionalDate(event.target.value) })} type="date" value={milestone.forecastDate ?? ""} /></label><label className="text-sm font-medium text-slate-700">Actual date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { actualDate: optionalDate(event.target.value) })} type="date" value={milestone.actualDate ?? ""} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteMilestone(milestone)} type="button">Delete milestone</button><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { description: event.target.value })} value={milestone.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { commentary: event.target.value })} value={milestone.commentary ?? ""} /></label></div>{renderRelatedGovernance(file, "milestone", milestone.id)}</div>))}</div></div>);
+                  return (<div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" id={`stage-${stage.id}`} key={stage.id}><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div className="grid flex-1 gap-3 md:grid-cols-2"><label className="text-sm font-medium text-slate-700">Stage name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { name: event.target.value })} value={stage.name} /></label><label className="text-sm font-medium text-slate-700">Stage status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { status: event.target.value as StageStatus })} value={stage.status ?? "not_started"}>{stageStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Stage commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateStage(stage.id, { commentary: event.target.value })} value={stage.commentary ?? ""} /></label></div><div className="flex gap-2"><button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={() => addMilestone(stage.id)} type="button">Add milestone</button><button className="rounded-2xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" onClick={() => deleteStage(stage)} type="button">Delete</button></div></div>{renderRelatedGovernance(file, "stage", stage.id)}<div className="mt-4 space-y-3">{milestones.length === 0 ? (<p className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No milestones yet for this stage.</p>) : milestones.map((milestone) => (<div className="rounded-2xl border border-slate-200 bg-white p-4" id={`milestone-${milestone.id}`} key={milestone.id}><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Milestone name<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { name: event.target.value })} value={milestone.name} /></label><label className="text-sm font-medium text-slate-700">Status<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { status: event.target.value as MilestoneStatus })} value={milestone.status}>{milestoneStatuses.map((status) => (<option key={status} value={status}>{statusLabel(status)}</option>))}</select></label><div className="rounded-2xl bg-slate-100 p-3 text-sm"><span className="font-semibold text-slate-500">Variance</span><span className="mt-1 block font-bold text-slate-900">{formatVariance(milestone)}</span></div><label className="text-sm font-medium text-slate-700">Planned date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { plannedDate: event.target.value })} type="date" value={milestone.plannedDate} /></label><label className="text-sm font-medium text-slate-700">Forecast date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { forecastDate: optionalDate(event.target.value) })} type="date" value={milestone.forecastDate ?? ""} /></label><label className="text-sm font-medium text-slate-700">Actual date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { actualDate: optionalDate(event.target.value) })} type="date" value={milestone.actualDate ?? ""} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteMilestone(milestone)} type="button">Delete milestone</button><label className="text-sm font-medium text-slate-700 md:col-span-2">Description<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { description: event.target.value })} value={milestone.description ?? ""} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2">Commentary<textarea className="mt-2 min-h-16 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateMilestone(milestone.id, { commentary: event.target.value })} value={milestone.commentary ?? ""} /></label></div>{renderRelatedGovernance(file, "milestone", milestone.id)}</div>))}</div></div>);
                 })}</div>
               </section>
             );
@@ -735,7 +758,7 @@ export function ProjectFileWorkspace() {
         </div>
         <div className="grid gap-6 xl:grid-cols-[1fr_22rem]">
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm"><div className="grid border-b border-slate-200 bg-slate-50" style={{ gridTemplateColumns: `16rem repeat(${headers.length}, minmax(5rem, 1fr))` }}><div className="px-4 py-3 text-xs font-black uppercase tracking-[0.18em] text-slate-500">Swimlane</div>{headers.map((header) => <div className="border-l border-slate-200 px-3 py-3 text-center text-xs font-bold uppercase text-slate-500" key={header}>{header}</div>)}</div><div className="divide-y divide-slate-100">{groups.map((group) => <div className="grid min-h-24" key={group.id} style={{ gridTemplateColumns: `16rem 1fr` }}><button className="bg-white px-4 py-4 text-left hover:bg-blue-50" onClick={() => setRoadmapSelection({ type: "project", projectId: group.project.id })} type="button"><p className="font-bold text-slate-950">{group.label}</p><p className="mt-1 text-xs text-slate-500">{group.sublabel}</p></button><div className="relative bg-[linear-gradient(to_right,#e2e8f0_1px,transparent_1px)] p-4" style={{ backgroundSize: `${100 / headers.length}% 100%` }}><div className="absolute bottom-0 top-0 w-0.5 bg-blue-600/70" style={{ left: `${clampPercent(today)}%` }} title="Today" />{group.items.map((item, index) => <button className={`absolute h-4 w-4 -translate-x-1/2 rotate-45 rounded-[0.2rem] border ${milestoneTone(item)} shadow-sm ring-2 ring-white`} key={item.milestone.id} onClick={() => setRoadmapSelection({ type: "milestone", projectId: item.project.id, milestoneId: item.milestone.id })} style={{ left: `${clampPercent(item.milestone.forecastDate || item.milestone.plannedDate)}%`, top: `${1 + (index % 4) * 1.15}rem` }} title={item.milestone.name}><span className="sr-only">{item.milestone.name}</span></button>)}{roadmapShowDependencies ? openDependencies.filter(({ project }) => project.id === group.project.id).slice(0, 3).map(({ dependency }, index) => <button className="absolute bottom-2 rounded-full border border-slate-300 bg-slate-100 px-2 py-1 text-[0.65rem] font-bold text-slate-600 hover:border-blue-300" key={dependency.id} onClick={() => setRoadmapSelection({ type: "dependency", projectId: group.project.id, dependencyId: dependency.id })} style={{ left: `${Math.min(88, 4 + index * 28)}%` }} type="button">↔ {dependency.title}</button>) : null}</div></div>)}</div></div>
-          <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Detail panel</p>{!selected ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">Select a project, milestone or dependency to view details.</p> : "milestone" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.milestone.name}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Workstream:</strong> {selected.workstream?.name ?? "Unassigned"}</p><p><strong>Stage:</strong> {selected.stage?.name ?? "Unassigned"}</p><p><strong>Date:</strong> {selected.milestone.forecastDate || selected.milestone.plannedDate}</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(selected.milestone.status)}`}>{statusLabel(selected.milestone.status)}</span></p><p><strong>Owner:</strong> {selected.project.projectManager || "Project Manager"}</p><p className="whitespace-pre-wrap"><strong>Commentary:</strong> {selected.milestone.commentary || selected.milestone.description || "No commentary captured."}</p>{renderRelatedGovernance(file, "milestone", selected.milestone.id)}</div> : "dependency" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.dependency.title}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Date:</strong> {selected.dependency.dueDate}</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(ragFromDependency(selected.dependency, today))}`}>{statusLabel(selected.dependency.status)}</span></p><p><strong>Owner:</strong> {selected.dependency.owner || "Unassigned"}</p><p>{selected.dependency.description || selected.dependency.commentary || "No dependency commentary captured."}</p></div> : <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.name}</h4><p><strong>Project:</strong> {selected.name}</p><p><strong>Owner:</strong> {selected.projectManager || "Project Manager not set"}</p><p><strong>Stage:</strong> Portfolio project</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(selected.status)}`}>{statusLabel(selected.status)}</span></p><p>{selected.description || "No project description captured."}</p></div>}</aside>
+          <aside className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Editable detail panel</p>{!selected ? <p className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">Select a project, milestone or dependency to view details.</p> : "milestone" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.milestone.name}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Workstream:</strong> {selected.workstream?.name ?? "Unassigned"}</p><p><strong>Stage:</strong> {selected.stage?.name ?? "Unassigned"}</p><label className="block font-medium text-slate-700">Name<input className="mt-1 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { name: event.target.value })} value={selected.milestone.name} /></label><label className="block font-medium text-slate-700">Owner<input className="mt-1 w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2" readOnly value={selected.project.projectManager || file.portfolio.portfolioManager || ""} /></label><label className="block font-medium text-slate-700">Planned Date<input className="mt-1 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { plannedDate: event.target.value })} type="date" value={selected.milestone.plannedDate} /></label><label className="block font-medium text-slate-700">Forecast Date<input className="mt-1 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { forecastDate: optionalDate(event.target.value) })} type="date" value={selected.milestone.forecastDate ?? ""} /></label><label className="block font-medium text-slate-700">Actual Date<input className="mt-1 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { actualDate: optionalDate(event.target.value) })} type="date" value={selected.milestone.actualDate ?? ""} /></label><label className="block font-medium text-slate-700">Status<select className="mt-1 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { status: event.target.value as MilestoneStatus })} value={selected.milestone.status}>{milestoneStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label><label className="block font-medium text-slate-700">Description<textarea className="mt-1 min-h-20 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { description: event.target.value })} value={selected.milestone.description ?? ""} /></label><label className="block font-medium text-slate-700">Commentary<textarea className="mt-1 min-h-20 w-full rounded-2xl border border-slate-300 px-3 py-2" onChange={(event) => updateMilestone(selected.milestone.id, { commentary: event.target.value })} value={selected.milestone.commentary ?? ""} /></label>{renderRelatedGovernance(file, "milestone", selected.milestone.id)}</div> : "dependency" in selected ? <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.dependency.title}</h4><p><strong>Project:</strong> {selected.project.name}</p><p><strong>Date:</strong> {selected.dependency.dueDate}</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(ragFromDependency(selected.dependency, today))}`}>{statusLabel(selected.dependency.status)}</span></p><p><strong>Owner:</strong> {selected.dependency.owner || "Unassigned"}</p><p>{selected.dependency.description || selected.dependency.commentary || "No dependency commentary captured."}</p></div> : <div className="mt-4 space-y-3 text-sm"><h4 className="text-xl font-bold">{selected.name}</h4><p><strong>Project:</strong> {selected.name}</p><p><strong>Owner:</strong> {selected.projectManager || "Project Manager not set"}</p><p><strong>Stage:</strong> Portfolio project</p><p><strong>Status:</strong> <span className={`rounded-full border px-2 py-1 text-xs font-bold uppercase ${statusTone(selected.status)}`}>{statusLabel(selected.status)}</span></p><p>{selected.description || "No project description captured."}</p></div>}</aside>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Portfolio Health</h4><p className="mt-2 text-sm text-slate-600">{overdue > 0 ? "Red: overdue milestones require executive attention." : atRisk > 0 ? "Amber: at-risk milestones or blocked dependencies present." : "Green: no major roadmap exceptions detected."}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Projects Requiring Attention</h4><p className="mt-2 text-3xl font-black text-amber-700">{attentionProjects.length}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Upcoming Milestones</h4><p className="mt-2 text-sm text-slate-600">{visibleMilestones.slice(0, 4).map((item) => item.milestone.name).join(" · ") || "No milestones in view."}</p></article><article className="rounded-3xl border border-slate-200 bg-white p-5"><h4 className="font-bold">Legend</h4><div className="mt-3 grid gap-2 text-xs font-bold text-slate-600"><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-emerald-600" />On track</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-amber-500" />At risk</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-red-600" />Overdue/problem</span><span><i className="mr-2 inline-block h-3 w-3 rotate-45 bg-purple-600" />Milestone marker</span><span><i className="mr-2 inline-block h-3 w-3 rounded-full bg-slate-300" />Dependency</span></div></article></div>
       </section>
@@ -892,7 +915,7 @@ export function ProjectFileWorkspace() {
           <label className="text-sm font-medium text-slate-700">Sort by<select className="mt-2 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3" onChange={(event) => setTimelineSortOption(event.target.value as TimelineSortOption)} value={timelineSortOption}>{timelineSortOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
         </div>
 
-        {file.milestones.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">Create workstreams, stages and milestones to populate the timeline.</p> : timelineItems.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No milestones match the current timeline filters.</p> : <div className="space-y-6">{groupedWorkstreams.map(({ workstream, stages }) => <section className="rounded-3xl border border-slate-200 bg-white p-6" key={workstream.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Workstream</p><h4 className="mt-1 text-xl font-bold">{workstream.name}</h4></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(workstream.status)}`}>{statusLabel(workstream.status)}</span></div><div className="mt-5 space-y-5">{stages.map(({ stage, milestones }) => <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" key={stage.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Stage</p><h5 className="mt-1 text-lg font-bold">{stage.name}</h5></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(stage.status ?? "not_started")}`}>{statusLabel(stage.status ?? "not_started")}</span></div><div className="mt-4 grid gap-4">{milestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-1 text-sm text-slate-600">{workstream.name} · {stage.name}</p></div><div className="flex flex-wrap gap-2"><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(item.milestone.status)}`}>{statusLabel(item.milestone.status)}</span>{item.isLate ? <span className="rounded-full border border-red-300 bg-white px-3 py-1 text-xs font-bold uppercase text-red-800">Late</span> : null}{item.isDueSoon ? <span className="rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-bold uppercase text-blue-800">Next 30 days</span> : null}</div></div><dl className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4"><div><dt className="font-semibold text-slate-500">Planned Date</dt><dd className="mt-1 font-bold">{item.milestone.plannedDate}</dd></div><div><dt className="font-semibold text-slate-500">Forecast Date</dt><dd className="mt-1 font-bold">{item.milestone.forecastDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Actual Date</dt><dd className="mt-1 font-bold">{item.milestone.actualDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Variance</dt><dd className="mt-1 font-bold">{formatVariance(item.milestone)}</dd></div><div><dt className="font-semibold text-slate-500">Status</dt><dd className="mt-1 font-bold capitalize">{statusLabel(item.milestone.status)}</dd></div><div><dt className="font-semibold text-slate-500">Owner</dt><dd className="mt-1 font-bold">{file.project.projectManager || "Project Manager"}</dd></div><div className="md:col-span-2"><dt className="font-semibold text-slate-500">Commentary</dt><dd className="mt-1 whitespace-pre-wrap text-slate-700">{item.milestone.commentary || "No commentary"}</dd></div></dl></article>)}</div></div>)}</div></section>)}{unassignedMilestones.length > 0 ? <section className="rounded-3xl border border-slate-200 bg-white p-6"><h4 className="text-xl font-bold">Unassigned milestones</h4><div className="mt-4 grid gap-4">{unassignedMilestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-2 text-sm text-slate-600">{item.workstream?.name ?? "Unassigned workstream"} · {item.stage?.name ?? "Unassigned stage"}</p><p className="mt-3 text-sm font-semibold text-slate-700">Planned {item.milestone.plannedDate} · Forecast {item.milestone.forecastDate ?? "Not set"} · {formatVariance(item.milestone)}</p></article>)}</div></section> : null}</div>}
+        {file.milestones.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">Create workstreams, stages and milestones to populate the timeline.</p> : timelineItems.length === 0 ? <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No milestones match the current timeline filters.</p> : <div className="space-y-6">{groupedWorkstreams.map(({ workstream, stages }) => <section className="rounded-3xl border border-slate-200 bg-white p-6" key={workstream.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Workstream</p><h4 className="mt-1 text-xl font-bold">{workstream.name}</h4></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(workstream.status)}`}>{statusLabel(workstream.status)}</span></div><div className="mt-5 space-y-5">{stages.map(({ stage, milestones }) => <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5" id={`stage-${stage.id}`} key={stage.id}><div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Stage</p><h5 className="mt-1 text-lg font-bold">{stage.name}</h5></div><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(stage.status ?? "not_started")}`}>{statusLabel(stage.status ?? "not_started")}</span></div><div className="mt-4 grid gap-4">{milestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-1 text-sm text-slate-600">{workstream.name} · {stage.name}</p></div><div className="flex flex-wrap gap-2"><span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusTone(item.milestone.status)}`}>{statusLabel(item.milestone.status)}</span>{item.isLate ? <span className="rounded-full border border-red-300 bg-white px-3 py-1 text-xs font-bold uppercase text-red-800">Late</span> : null}{item.isDueSoon ? <span className="rounded-full border border-blue-300 bg-white px-3 py-1 text-xs font-bold uppercase text-blue-800">Next 30 days</span> : null}</div></div><dl className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4"><div><dt className="font-semibold text-slate-500">Planned Date</dt><dd className="mt-1 font-bold">{item.milestone.plannedDate}</dd></div><div><dt className="font-semibold text-slate-500">Forecast Date</dt><dd className="mt-1 font-bold">{item.milestone.forecastDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Actual Date</dt><dd className="mt-1 font-bold">{item.milestone.actualDate ?? "Not set"}</dd></div><div><dt className="font-semibold text-slate-500">Variance</dt><dd className="mt-1 font-bold">{formatVariance(item.milestone)}</dd></div><div><dt className="font-semibold text-slate-500">Status</dt><dd className="mt-1 font-bold capitalize">{statusLabel(item.milestone.status)}</dd></div><div><dt className="font-semibold text-slate-500">Owner</dt><dd className="mt-1 font-bold">{file.project.projectManager || "Project Manager"}</dd></div><div className="md:col-span-2"><dt className="font-semibold text-slate-500">Commentary</dt><dd className="mt-1 whitespace-pre-wrap text-slate-700">{item.milestone.commentary || "No commentary"}</dd></div></dl></article>)}</div></div>)}</div></section>)}{unassignedMilestones.length > 0 ? <section className="rounded-3xl border border-slate-200 bg-white p-6"><h4 className="text-xl font-bold">Unassigned milestones</h4><div className="mt-4 grid gap-4">{unassignedMilestones.map((item) => <article className={`rounded-2xl border p-4 ${timelineCardTone(item)}`} key={item.milestone.id}><h6 className="text-lg font-bold">{item.milestone.name}</h6><p className="mt-2 text-sm text-slate-600">{item.workstream?.name ?? "Unassigned workstream"} · {item.stage?.name ?? "Unassigned stage"}</p><p className="mt-3 text-sm font-semibold text-slate-700">Planned {item.milestone.plannedDate} · Forecast {item.milestone.forecastDate ?? "Not set"} · {formatVariance(item.milestone)}</p></article>)}</div></section> : null}</div>}
       </section>
     );
   }
@@ -909,7 +932,7 @@ export function ProjectFileWorkspace() {
     const now = new Date().toISOString();
     const note: Note = {
       id: crypto.randomUUID(),
-      title: "New note",
+      title: nextDefaultName(projectFile?.notes.map((item) => item.title) ?? [], "New note"),
       type: "general",
       date: todayIsoDate(),
       content: "",
@@ -919,6 +942,7 @@ export function ProjectFileWorkspace() {
     };
 
     mutateProjectFile((current) => ({ ...current, notes: [note, ...current.notes] }), "Note created.");
+    focusRecord(`note-${note.id}`);
   }
 
   function updateNote(id: string, patch: Partial<Pick<Note, "title" | "type" | "date" | "content" | "tags">>) {
@@ -972,7 +996,7 @@ export function ProjectFileWorkspace() {
         ) : filteredNotes.length === 0 ? (
           <p className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-sm text-slate-600">No notes match the current search and filters.</p>
         ) : (
-          <div className="grid gap-5">{filteredNotes.map((note) => <article className="rounded-3xl border border-slate-200 bg-white p-5" key={note.id}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { title: event.target.value })} value={note.title} /></label><label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { type: event.target.value as NoteType })} value={note.type}>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { date: event.target.value })} type="date" value={note.date} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Content<textarea className="mt-2 min-h-40 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { content: event.target.value })} value={note.content} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-3">Tags<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { tags: parseTags(event.target.value) })} placeholder="Comma-separated tags" value={(note.tags ?? []).join(", ")} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteNote(note)} type="button">Delete Note</button><dl className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 md:col-span-2 xl:col-span-4 md:grid-cols-2"><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Created At</dt><dd className="mt-1">{formatReportGeneratedAt(note.createdAt)}</dd></div><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Updated At</dt><dd className="mt-1">{formatReportGeneratedAt(note.updatedAt)}</dd></div></dl></div></article>)}</div>
+          <div className="grid gap-5">{filteredNotes.map((note) => <article className="rounded-3xl border border-slate-200 bg-white p-5" id={`note-${note.id}`} key={note.id}><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-sm font-medium text-slate-700 xl:col-span-2">Title <span className="text-red-600" aria-label="required">*</span><input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { title: event.target.value })} value={note.title} /></label><label className="text-sm font-medium text-slate-700">Type<select className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { type: event.target.value as NoteType })} value={note.type}>{noteTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Date<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { date: event.target.value })} type="date" value={note.date} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-4">Content<textarea className="mt-2 min-h-40 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { content: event.target.value })} value={note.content} /></label><label className="text-sm font-medium text-slate-700 md:col-span-2 xl:col-span-3">Tags<input className="mt-2 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => updateNote(note.id, { tags: parseTags(event.target.value) })} placeholder="Comma-separated tags" value={(note.tags ?? []).join(", ")} /></label><button className="self-end rounded-2xl border border-red-200 px-4 py-3 text-sm font-semibold text-red-700" onClick={() => deleteNote(note)} type="button">Delete Note</button><dl className="grid gap-3 rounded-2xl bg-slate-50 p-4 text-xs text-slate-600 md:col-span-2 xl:col-span-4 md:grid-cols-2"><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Created At</dt><dd className="mt-1">{formatReportGeneratedAt(note.createdAt)}</dd></div><div><dt className="font-bold uppercase tracking-[0.18em] text-slate-500">Updated At</dt><dd className="mt-1">{formatReportGeneratedAt(note.updatedAt)}</dd></div></dl></div></article>)}</div>
         )}
       </section>
     );
@@ -997,7 +1021,7 @@ export function ProjectFileWorkspace() {
     const firstWorkstreamId = projectFile?.workstreams[0]?.id ?? "";
     const dependency: Dependency = {
       id: crypto.randomUUID(),
-      title: "New dependency",
+      title: nextDefaultName(projectFile?.dependencies.map((item) => item.title) ?? [], "New dependency"),
       description: "",
       sourceWorkstreamId: firstWorkstreamId,
       sourceMilestoneId: undefined,
@@ -1009,7 +1033,8 @@ export function ProjectFileWorkspace() {
       commentary: "",
     };
 
-    mutateProjectFile((current) => ({ ...current, dependencies: [...current.dependencies, dependency] }), "Dependency created.");
+    mutateProjectFile((current) => ({ ...current, dependencies: [dependency, ...current.dependencies] }), "Dependency created.");
+    focusRecord(`dependency-${dependency.id}`);
   }
 
   function updateDependency(id: string, patch: Partial<Dependency>) {
@@ -1066,8 +1091,9 @@ export function ProjectFileWorkspace() {
   }
 
   function addAction() {
-    const action: ActionItem = { id: crypto.randomUUID(), description: "New action", owner: "", dueDate: todayIsoDate(), status: "open", commentary: "" };
-    mutateProjectFile((current) => ({ ...current, actions: [...current.actions, action] }), "Action created.");
+    const action: ActionItem = { id: crypto.randomUUID(), description: nextDefaultName(projectFile?.actions.map((item) => item.description) ?? [], "New action"), owner: "", dueDate: todayIsoDate(), status: "open", commentary: "" };
+    mutateProjectFile((current) => ({ ...current, actions: [action, ...current.actions] }), "Action created.");
+    focusRecord(`action-${action.id}`);
   }
 
   function updateAction(id: string, patch: Partial<ActionItem>) {
@@ -1100,8 +1126,9 @@ export function ProjectFileWorkspace() {
   }
 
   function addDecision() {
-    const decision: Decision = { id: crypto.randomUUID(), title: "New decision", context: "", decisionText: "", decisionMaker: "", decisionDate: todayIsoDate(), impact: "low", evidenceLinks: [] };
-    mutateProjectFile((current) => ({ ...current, decisions: [...current.decisions, decision] }), "Decision created.");
+    const decision: Decision = { id: crypto.randomUUID(), title: nextDefaultName(projectFile?.decisions.map((item) => item.title) ?? [], "New decision"), context: "", decisionText: "", decisionMaker: "", decisionDate: todayIsoDate(), impact: "low", evidenceLinks: [] };
+    mutateProjectFile((current) => ({ ...current, decisions: [decision, ...current.decisions] }), "Decision created.");
+    focusRecord(`decision-${decision.id}`);
   }
 
   function updateDecision(id: string, patch: Partial<Decision>) {
@@ -1165,13 +1192,13 @@ export function ProjectFileWorkspace() {
     return <>{selectedMissing ? <option value={selectedId}>Deleted or unavailable item</option> : null}{file.milestones.map((milestone) => <option key={milestone.id} value={milestone.id}>{milestone.name}</option>)}</>;
   }
 
-  function addRisk() { const risk: Risk = { id: crypto.randomUUID(), title: "New risk", description: "", owner: "", probability: "medium", impact: "medium", mitigation: "", status: "open" }; mutateProjectFile((current) => ({ ...current, risks: [...current.risks, risk] }), "Risk created."); }
+  function addRisk() { const risk: Risk = { id: crypto.randomUUID(), title: nextDefaultName(projectFile?.risks.map((item) => item.title) ?? [], "New risk"), description: "", owner: "", probability: "medium", impact: "medium", mitigation: "", status: "open" }; mutateProjectFile((current) => ({ ...current, risks: [risk, ...current.risks] }), "Risk created."); focusRecord(`risk-${risk.id}`); }
   function updateRisk(id: string, patch: Partial<Risk>) { mutateProjectFile((current) => ({ ...current, risks: current.risks.map((risk) => (risk.id === id ? { ...risk, ...patch } : risk)) }), "Risk updated."); }
   function deleteRisk(risk: Risk) { if (window.confirm(`Delete risk "${risk.title}"? This cannot be undone.`)) mutateProjectFile((current) => ({ ...current, risks: current.risks.filter((item) => item.id !== risk.id) }), "Risk deleted."); }
-  function addAssumption() { const assumption: Assumption = { id: crypto.randomUUID(), title: "New assumption", description: "", owner: "", validationDate: todayIsoDate(), status: "active" }; mutateProjectFile((current) => ({ ...current, assumptions: [...current.assumptions, assumption] }), "Assumption created."); }
+  function addAssumption() { const assumption: Assumption = { id: crypto.randomUUID(), title: nextDefaultName(projectFile?.assumptions.map((item) => item.title) ?? [], "New assumption"), description: "", owner: "", validationDate: todayIsoDate(), status: "active" }; mutateProjectFile((current) => ({ ...current, assumptions: [assumption, ...current.assumptions] }), "Assumption created."); focusRecord(`assumption-${assumption.id}`); }
   function updateAssumption(id: string, patch: Partial<Assumption>) { mutateProjectFile((current) => ({ ...current, assumptions: current.assumptions.map((assumption) => (assumption.id === id ? { ...assumption, ...patch } : assumption)) }), "Assumption updated."); }
   function deleteAssumption(assumption: Assumption) { if (window.confirm(`Delete assumption "${assumption.title}"? This cannot be undone.`)) mutateProjectFile((current) => ({ ...current, assumptions: current.assumptions.filter((item) => item.id !== assumption.id) }), "Assumption deleted."); }
-  function addIssue() { const issue: Issue = { id: crypto.randomUUID(), title: "New issue", description: "", owner: "", severity: "medium", status: "open", targetResolutionDate: todayIsoDate() }; mutateProjectFile((current) => ({ ...current, issues: [...current.issues, issue] }), "Issue created."); }
+  function addIssue() { const issue: Issue = { id: crypto.randomUUID(), title: nextDefaultName(projectFile?.issues.map((item) => item.title) ?? [], "New issue"), description: "", owner: "", severity: "medium", status: "open", targetResolutionDate: todayIsoDate() }; mutateProjectFile((current) => ({ ...current, issues: [issue, ...current.issues] }), "Issue created."); focusRecord(`issue-${issue.id}`); }
   function updateIssue(id: string, patch: Partial<Issue>) { mutateProjectFile((current) => ({ ...current, issues: current.issues.map((issue) => (issue.id === id ? { ...issue, ...patch } : issue)) }), "Issue updated."); }
   function deleteIssue(issue: Issue) { if (window.confirm(`Delete issue "${issue.title}"? This cannot be undone.`)) mutateProjectFile((current) => ({ ...current, issues: current.issues.filter((item) => item.id !== issue.id) }), "Issue deleted."); }
 
@@ -1325,7 +1352,7 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
             <p className="text-sm font-semibold uppercase tracking-[0.28em] text-blue-700">PGW</p>
             <h1 className="mt-4 text-4xl font-bold tracking-tight md:text-6xl">Project Governance Workspace</h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-600">
-              Open or create a single local <code className="rounded bg-slate-100 px-1 py-0.5">.pmgov</code> file to manage project governance in browser memory.
+              Open or create a local <code className="rounded bg-slate-100 px-1 py-0.5">.pmgov</code> file to manage your project in browser memory.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button className="rounded-2xl bg-blue-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-800" onClick={createNewProject} type="button">
@@ -1335,26 +1362,25 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
                 Open .pmgov File
               </button>
             </div>
-            <p className="mt-8 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-medium text-blue-900">
-              Your project data is stored only in the file you open or save.
-            </p>
-            <p className={`mt-4 rounded-2xl border p-4 text-sm ${message.tone === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-700"}`} role="status">
-              {message.text}
-            </p>
+            <div className={`mt-4 flex items-start justify-between gap-3 rounded-2xl border p-4 text-sm ${message.tone === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-700"}`} role="status">
+              <span>{message.text}</span>{message.tone === "error" ? <button aria-label="Close error" className="font-bold" onClick={() => setMessage({ tone: "info", text: "Open or create a local .pmgov file to manage your project in browser memory." })} type="button">×</button> : null}
+            </div>
             <input accept=".pmgov,application/json" className="hidden" onChange={openProject} ref={fileInputRef} type="file" />
           </div>
         </section>
       ) : (
         <div className="flex min-h-screen">
-          <aside className="hidden w-72 shrink-0 border-r border-slate-800 bg-slate-950 p-5 text-white shadow-xl lg:block">
-            <div className="mb-8">
-              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-blue-300">PGW</p>
-              <h1 className="mt-2 text-2xl font-bold text-white">Project Governance Workspace</h1>
+          {!isSidebarCollapsed ? (
+          <aside className="sticky top-0 hidden h-screen w-64 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-950 p-4 text-white shadow-xl lg:block">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div><p className="text-xs font-semibold uppercase tracking-[0.25em] text-blue-300">PGW</p>
+              <h1 className="mt-1 text-sm font-bold leading-5 text-white">Project Governance Workspace</h1></div>
+              <button aria-label="Collapse sidebar" className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800" onClick={() => setIsSidebarCollapsed(true)} type="button">←</button>
             </div>
-            <nav aria-label="Project workspace sections" className="space-y-2">
+            <nav aria-label="Project workspace sections" className="space-y-1">
               {navigationItems.map((item) => (
                 <button
-                  className={`block w-full rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${activeView === item ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
+                  className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-medium transition ${activeView === item ? "bg-blue-600 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}
                   key={item}
                   onClick={() => setActiveView(item)}
                   type="button"
@@ -1364,14 +1390,16 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
               ))}
             </nav>
           </aside>
+          ) : (
+            <button aria-label="Restore sidebar" className="sticky top-4 z-30 ml-2 mt-4 hidden h-9 w-9 shrink-0 rounded-full bg-slate-950 text-white shadow-lg lg:block" onClick={() => setIsSidebarCollapsed(false)} type="button">→</button>
+          )}
 
           <section className="flex min-w-0 flex-1 flex-col">
             <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-700">Local project file</p>
                   <h2 className="mt-1 text-2xl font-bold tracking-tight">{projectFile.project.name}</h2>
-                  <p className={`mt-1 text-sm font-semibold ${isDirty ? "text-amber-700" : "text-green-700"}`}>{isDirty ? "Unsaved changes — save or Save As to keep them" : "Saved to current browser snapshot"}</p>
+                  <p className={`mt-1 text-sm font-semibold ${isDirty ? "text-amber-700" : "text-green-700"}`}>{isDirty ? "Unsaved changes detected" : "Saved to current browser snapshot"}</p>
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <button className="rounded-2xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:border-blue-300 hover:bg-blue-50" onClick={() => fileInputRef.current?.click()} type="button">Open</button>
@@ -1394,22 +1422,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
             </div>
 
             <div className="flex-1 p-6">
-              <p className={`mb-6 rounded-2xl border p-4 text-sm ${message.tone === "error" ? "border-red-200 bg-red-50 text-red-800" : message.tone === "success" ? "border-green-200 bg-green-50 text-green-800" : "border-blue-200 bg-blue-50 text-blue-800"}`} role="status">
-                {message.text}
-              </p>
-
-              <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-5">
-                <label className="text-sm font-bold uppercase tracking-[0.2em] text-slate-500">Active project</label>
-                <select className="mt-3 w-full rounded-2xl border border-slate-300 px-4 py-3" onChange={(event) => switchActiveProject(event.target.value)} value={projectFile.activeProjectId}>
-                  {projectFile.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-                </select>
-                <p className="mt-2 text-sm text-slate-600">All project workspaces below use the selected project inside this local portfolio file. Switching projects saves the current in-memory edits into the portfolio before loading the next project.</p>
-              </div>
-
-              <div className="mb-6 grid gap-4 md:grid-cols-3">
-                <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">File</p><p className="mt-3 text-lg font-bold">{openedFileName ?? "No file saved"}</p></div>
-                <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Validation</p><p className={`mt-3 text-lg font-bold ${validation?.success ? "text-green-700" : "text-red-700"}`}>{validation?.success ? "Schema valid" : "Schema invalid"}</p></div>
-                <div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Records</p><p className="mt-3 text-lg font-bold">{countRecords(projectFile).reduce((total, [, count]) => total + count, 0)} total records</p><p className="mt-1 text-xs text-slate-500">{countRecords(projectFile).map(([label, count]) => `${label}: ${count}`).join(" · ")}</p></div>
+              <div className={`sticky top-24 z-10 mb-6 flex items-start justify-between gap-3 rounded-2xl border p-4 text-sm shadow-sm ${message.tone === "error" ? "border-red-200 bg-red-50 text-red-800" : message.tone === "success" ? "border-green-200 bg-green-50 text-green-800" : "border-blue-200 bg-blue-50 text-blue-800"}`} role="status">
+                <span>{message.text}</span>{message.tone === "error" ? <button aria-label="Close error" className="font-bold" onClick={() => setMessage({ tone: "info", text: "Error dismissed." })} type="button">×</button> : null}
               </div>
 
               {activeView === "Portfolio" ? (
@@ -1432,6 +1446,8 @@ Health reasons: ${data.projectHealth.reasons.join("; ")}\n\n## Key Risks / Atten
                 renderRaidWorkspace(projectFile)
               ) : activeView === "Reports" ? (
                 renderExecutiveReportWorkspace(projectFile)
+               ) : activeView === "Settings" ? (
+                <section className="space-y-6" id="settings"><div className="rounded-3xl border border-slate-200 bg-white p-6"><p className="text-sm font-semibold uppercase tracking-[0.22em] text-blue-700">Settings</p><h3 className="mt-2 text-2xl font-bold">File and workspace settings</h3><label className="mt-5 block text-sm font-bold uppercase tracking-[0.2em] text-slate-500">Active project<select className="mt-3 w-full rounded-2xl border border-slate-300 px-4 py-3 normal-case tracking-normal" onChange={(event) => switchActiveProject(event.target.value)} value={projectFile.activeProjectId}>{projectFile.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><p className="mt-2 text-sm text-slate-600">Switching projects saves the current in-memory edits into the portfolio before loading the next project.</p></div><div className="grid gap-4 md:grid-cols-3"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">File name</p><p className="mt-3 text-lg font-bold">{openedFileName ?? "No file saved"}</p></div><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Schema validation</p><p className={`mt-3 text-lg font-bold ${validation?.success ? "text-green-700" : "text-red-700"}`}>{validation?.success ? "Schema valid" : "Schema invalid"}</p></div><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Records</p><p className="mt-3 text-lg font-bold">{countRecords(projectFile).reduce((total, [, count]) => total + count, 0)} total records</p><p className="mt-1 text-xs text-slate-500">{countRecords(projectFile).map(([label, count]) => `${label}: ${count}`).join(" · ")}</p></div></div><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Portfolio metadata</p><p className="mt-3 text-sm text-slate-700">{projectFile.portfolio.name} · {projectFile.projects.length} project(s) · Active project ID {projectFile.activeProjectId}</p></div></section>
               ) : (
                 renderPlaceholder(activeView)
               )}
